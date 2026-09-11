@@ -1,0 +1,15 @@
+# Inkstone partition table
+# Based on huge_app.csv with two changes:
+#   - NVS enlarged to 64KB (config data headroom)
+#   - dedicated 2MB raw "frame" partition (subtype 0x99) for the cached
+#     display frame - sized for future panels up to Spectra 6 1600x1200
+#     (4bpp = 960KB), with margin
+# NOTE: keep this file pure ASCII - the platform parser reads it with the
+# system locale codec (GBK on zh-CN Windows).
+# NOTE: flashing this table wipes the old NVS region (Wi-Fi credentials,
+# API token, sleep params are reset once).
+# Name,   Type, SubType, Offset,  Size,     Flags
+nvs,      data, nvs,     0x9000,  0x10000,
+phy_init, data, phy,     0x19000, 0x1000,
+factory,  app,  factory, 0x20000, 0x300000,
+frame,    data, 0x99,    0x320000, 0x200000,

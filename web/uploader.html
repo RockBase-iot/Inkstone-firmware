@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<!-- Copyright (c) 2025 RockBase-IoT, Chengdu Rockbase Co., Ltd. All rights reserved. -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Inkstone · Firmware</title>
+<style>
+  :root { --ink:#2b2b2b; --paper:#f5f3ec; --accent:#b83a32; --line:#d8d4c8; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+         background:var(--paper); color:var(--ink); max-width:720px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin-bottom:4px; }
+  h2 { font-size:15px; margin:20px 0 8px; border-left:4px solid var(--accent); padding-left:8px; }
+  .sub { color:#777; font-size:12px; margin-bottom:16px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px;
+           padding:10px 18px; font-size:14px; cursor:pointer; }
+  button:disabled { background:#c9c5ba; cursor:not-allowed; }
+  button.ghost { background:#fff; color:var(--ink); border:1px solid var(--line); }
+  input[type=text],input[type=password] { flex:1; min-width:160px; padding:9px 10px;
+           border:1px solid var(--line); border-radius:8px; font-size:14px; }
+  #drop { border:2px dashed var(--line); border-radius:10px; padding:34px 10px;
+          text-align:center; color:#888; cursor:pointer; }
+  #drop.over { border-color:var(--accent); color:var(--accent); }
+  canvas { max-width:100%; border:1px solid var(--line); border-radius:6px;
+           display:block; margin-top:10px; touch-action:none; }
+  .bar { height:8px; background:var(--line); border-radius:4px; overflow:hidden; margin-top:10px; }
+  .bar>i { display:block; height:100%; width:0; background:var(--accent); transition:width .2s; }
+  #msg { font-size:13px; margin-top:10px; min-height:18px; }
+  .ok { color:#2e7d32; } .err { color:#b3261e; } .info { color:#666; }
+  .kv { font-size:12px; color:#666; line-height:1.9; word-break:break-all; }
+  .kv b { color:var(--ink); }
+  .hidden { display:none; }
+  .badge { display:inline-block; background:var(--ink); color:#fff; font-size:11px;
+           border-radius:4px; padding:1px 6px; margin-left:6px; vertical-align:2px; }
+  .langbtn { float:right; }
+</style>
+</head>
+<body>
+<button class="ghost langbtn" id="langBtn">中文</button>
+<h1><span data-i18n="title">Inkstone Image Push</span><span class="badge" id="modeBadge">…</span></h1>
+<div class="sub" id="devInfo">…</div>
+
+<!-- 1. Pick image -->
+<div class="card">
+  <h2 data-i18n="s1">1 · Pick an image</h2>
+  <div id="drop"><span data-i18n="drop">Click or drag an image here</span><input type="file" id="file" accept="image/*" class="hidden"></div>
+</div>
+
+<!-- 2. Crop -->
+<div class="card hidden" id="cropCard">
+  <h2 data-i18n="s2">2 · Crop (fixed 4:3 · drag to move · wheel / pinch to zoom)</h2>
+  <canvas id="cropCv" width="640" height="360"></canvas>
+</div>
+
+<!-- 3. Preview -->
+<div class="card hidden" id="prevCard">
+  <h2 data-i18n="s3">3 · 4-color preview (close to real panel tone)</h2>
+  <canvas id="prevCv" width="400" height="300"></canvas>
+  <div class="row">
+    <button class="ghost" id="reDither" data-i18n="redither">Re-quantize</button>
+  </div>
+</div>
+
+<!-- 4. Upload -->
+<div class="card hidden" id="upCard">
+  <h2 data-i18n="s4">4 · Push to device</h2>
+  <div class="row"><button id="sendBtn" data-i18n="send">Show on display (~30 s)</button></div>
+  <div class="bar"><i id="bar"></i></div>
+  <div id="msg" class="info"></div>
+</div>
+
+<!-- Status -->
+<div class="card">
+  <h2 data-i18n="status">Device status</h2>
+  <div class="kv" id="statusBox">…</div>
+</div>
+
+<!-- AP mode: setup + security -->
+<div class="card hidden" id="apCard">
+  <h2 data-i18n="wifi">Wi-Fi setup (join home network)</h2>
+  <div class="row">
+    <input type="text" id="ssid" data-i18n-ph="ssidPh" placeholder="Wi-Fi name (SSID)">
+    <input type="password" id="wpass" data-i18n-ph="wpassPh" placeholder="Wi-Fi password">
+    <button id="setupBtn" data-i18n="setupBtn">Save &amp; reboot</button>
+  </div>
+  <h2 data-i18n="appw">Hotspot password</h2>
+  <div class="row">
+    <input type="password" id="appass" data-i18n-ph="appassPh" placeholder="New hotspot password (≥8 chars, after reboot)">
+    <button class="ghost" id="apBtn" data-i18n="apBtn">Change</button>
+  </div>
+  <h2 data-i18n="token">API token (for AI / scripts)</h2>
+  <div class="kv" id="tokenBox"></div>
+  <h2 data-i18n="openMode">Open API mode (no token)</h2>
+  <div class="row">
+    <button class="ghost" id="openBtn">…</button>
+    <span class="kv" data-i18n="openHint">For trusted home networks: /api/v1/* calls skip Bearer auth.</span>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ================= i18n (default English, persisted in localStorage) ================= */
+const I18N = {
+  en: {
+    title:"Inkstone Image Push", s1:"1 · Pick an image",
+    drop:"Click or drag an image here",
+    s2:"2 · Crop (fixed 4:3 · drag to move · wheel / pinch to zoom)",
+    s3:"3 · 4-color preview (close to real panel tone)", redither:"Re-quantize",
+    s4:"4 · Push to device", send:"Show on display (~30 s)",
+    status:"Device status", wifi:"Wi-Fi setup (join home network)",
+    ssidPh:"Wi-Fi name (SSID)", wpassPh:"Wi-Fi password", setupBtn:"Save & reboot",
+    appw:"Hotspot password", appassPh:"New hotspot password (≥8 chars, after reboot)",
+    apBtn:"Change", token:"API token (for AI / scripts)",
+    openMode:"Open API mode (no token)",
+    openHint:"For trusted home networks: /api/v1/* calls skip Bearer auth.",
+    connecting:"Connecting to device…", noConn:"Cannot reach device",
+    picked:"Picked: ", pickedRe:" (click to re-pick)",
+    decodeFail:"Image decode failed: ",
+    uploading:"Uploading…", accepted:"Accepted, refreshing (~30 s)…",
+    done:"Refresh done ✓ Device will sleep when idle",
+    fail:"Upload failed (", netErr:"Network error",
+    busy:"refreshing", idle:"idle", battery:"Battery", refresh:"Refresh",
+    sleepIn:"Sleep in", awake:"always-on", forever:"never",
+    setupOk:"Saved. Device reboots to join Wi-Fi; then visit http://%h.local",
+    setupFail:"Save failed", apOk:"Hotspot password changed (after reboot)",
+    apFail:"Password needs ≥ 8 chars",
+    openOn:"Open mode: ON — click to require token", openOff:"Open mode: OFF — click to skip token",
+    modeAP:"AP mode", retryIn:"s remaining"
+  },
+  zh: {
+    title:"Inkstone Firmware 本地图传", s1:"1 · 选择图片",
+    drop:"点击选择或拖拽图片到这里",
+    s2:"2 · 裁剪（4:3 固定比例，拖动移动 · 滚轮/双指缩放）",
+    s3:"3 · 四色效果预览（贴近真机哑光发色）", redither:"重新量化",
+    s4:"4 · 上传到设备", send:"刷屏显示（约 30 秒）",
+    status:"设备状态", wifi:"配网（连接到家里 Wi-Fi）",
+    ssidPh:"Wi-Fi 名称 (SSID)", wpassPh:"Wi-Fi 密码", setupBtn:"保存并重启",
+    appw:"热点密码", appassPh:"新热点密码（≥8 位，重启生效）",
+    apBtn:"修改", token:"API Token（AI / 脚本调用用）",
+    openMode:"开放 API 模式（免 Token）",
+    openHint:"适用于可信家用网络：/api/v1/* 调用不再校验 Bearer。",
+    connecting:"连接设备中…", noConn:"无法连接设备",
+    picked:"已选择：", pickedRe:"（点击可重新选择）",
+    decodeFail:"图片解码失败：",
+    uploading:"上传中…", accepted:"已接受，设备刷新中（约 30 秒）…",
+    done:"刷新完成 ✓ 设备将在空闲后自动休眠",
+    fail:"上传失败 (", netErr:"网络错误",
+    busy:"刷新中", idle:"空闲", battery:"电量", refresh:"刷新状态",
+    sleepIn:"距休眠", awake:"常醒", forever:"常醒",
+    setupOk:"已保存，设备将重启并连接 Wi-Fi。请改连家庭网络后访问 http://%h.local",
+    setupFail:"保存失败", apOk:"热点密码已修改，重启后生效",
+    apFail:"密码至少 8 位",
+    openOn:"开放模式：已开启 — 点击恢复 Token 校验", openOff:"开放模式：关闭 — 点击免 Token",
+    modeAP:"AP 模式", retryIn:"秒后可重试"
+  }
+};
+let lang = localStorage.getItem("ink_lang") || "en";
+const $ = id => document.getElementById(id);
+const msg = (s, cls) => { const m = $("msg"); m.textContent = s; m.className = cls || "info"; };
+function t(k) { return (I18N[lang] && I18N[lang][k]) || I18N.en[k] || k; }
+function applyLang() {
+  document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+  document.querySelectorAll("[data-i18n]").forEach(el => el.textContent = t(el.dataset.i18n));
+  document.querySelectorAll("[data-i18n-ph]").forEach(el => el.placeholder = t(el.dataset.i18nPh));
+  $("langBtn").textContent = lang === "zh" ? "English" : "中文";
+}
+$("langBtn").onclick = () => {
+  lang = lang === "zh" ? "en" : "zh";
+  localStorage.setItem("ink_lang", lang);
+  applyLang(); refreshInfo();
+};
+
+/* ================= Pixel format (§3, byte-identical to tools/convert_image.py) ====
+   Palette (packed RGB): black(0,0,0) white(255,255,255) yellow(255,210,0) red(200,30,30)
+   Distance: d = 299*dr² + 587*dg² + 114*db² (integer)
+   Dithering: Floyd-Steinberg serpentine, error /16 integer accumulation,
+              weights: right 7, lower-left 3, below 5, lower-right 1
+   Packing: byte = c0<<6 | c1<<4 | c2<<2 | c3, row-major, 30000 bytes total   */
+const W = 400, H = 300, FRAME_BYTES = 30000;
+const PAL_PACK = [[0,0,0],[255,255,255],[255,210,0],[200,30,30]];
+const PAL_VIEW = [[20,20,20],[245,243,235],[225,190,25],[185,45,40]];
+
+let srcBitmap = null;
+let frameBytes = null;
+
+/* ---------- Pick image ---------- */
+const drop = $("drop"), file = $("file");
+drop.onclick = () => file.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over");
+                     if (e.dataTransfer.files[0]) loadImage(e.dataTransfer.files[0]); };
+file.onchange = () => file.files[0] && loadImage(file.files[0]);
+
+async function loadImage(f) {
+  try {
+    srcBitmap = await createImageBitmap(f);
+    initCrop();
+    $("cropCard").classList.remove("hidden");
+    $("prevCard").classList.remove("hidden");
+    $("upCard").classList.remove("hidden");
+    drop.querySelector("span").textContent = t("picked") + f.name + t("pickedRe");
+    quantize();
+    msg("");
+  } catch (e) { msg(t("decodeFail") + e, "err"); }
+}
+
+/* ---------- Crop (self-implemented, fixed 4:3) ---------- */
+const cv = $("cropCv"), cx = cv.getContext("2d");
+let crop = { s: 1, x: 0, y: 0 };
+let drag = null, pinch = null;
+
+function initCrop() {
+  const iw = srcBitmap.width, ih = srcBitmap.height;
+  crop.s = Math.max(cv.width / iw, cv.height / ih);
+  crop.x = (cv.width - iw * crop.s) / 2;
+  crop.y = (cv.height - ih * crop.s) / 2;
+  drawCrop();
+}
+function cropRect() {
+  const m = 20, w = cv.width - 2 * m, h = w * 3 / 4;
+  return { x: m, y: (cv.height - h) / 2, w, h };
+}
+function drawCrop() {
+  const iw = srcBitmap.width, ih = srcBitmap.height;
+  cx.fillStyle = "#222"; cx.fillRect(0, 0, cv.width, cv.height);
+  cx.drawImage(srcBitmap, crop.x, crop.y, iw * crop.s, ih * crop.s);
+  const r = cropRect();
+  cx.fillStyle = "rgba(0,0,0,.55)";
+  cx.fillRect(0, 0, cv.width, r.y);
+  cx.fillRect(0, r.y + r.h, cv.width, cv.height - r.y - r.h);
+  cx.fillRect(0, r.y, r.x, r.h);
+  cx.fillRect(r.x + r.w, r.y, cv.width - r.x - r.w, r.h);
+  cx.strokeStyle = "#fff"; cx.lineWidth = 2; cx.strokeRect(r.x, r.y, r.w, r.h);
+}
+function clampCrop() {
+  const r = cropRect(), iw = srcBitmap.width * crop.s, ih = srcBitmap.height * crop.s;
+  if (iw < r.w) crop.s *= r.w / iw;
+  if (srcBitmap.height * crop.s < r.h) crop.s = r.h / srcBitmap.height;
+  crop.x = Math.min(crop.x, r.x); crop.y = Math.min(crop.y, r.y);
+  crop.x = Math.max(crop.x, r.x + r.w - srcBitmap.width * crop.s);
+  crop.y = Math.max(crop.y, r.y + r.h - srcBitmap.height * crop.s);
+}
+cv.addEventListener("pointerdown", e => { cv.setPointerCapture(e.pointerId);
+  drag = { x: e.offsetX, y: e.offsetY }; });
+cv.addEventListener("pointermove", e => { if (!drag) return;
+  crop.x += e.offsetX - drag.x; crop.y += e.offsetY - drag.y;
+  drag = { x: e.offsetX, y: e.offsetY }; clampCrop(); drawCrop(); });
+cv.addEventListener("pointerup", () => { drag = null; quantize(); });
+cv.addEventListener("wheel", e => { e.preventDefault();
+  const k = e.deltaY < 0 ? 1.08 : 0.92, r = cropRect();
+  const cxp = r.x + r.w / 2, cyp = r.y + r.h / 2;
+  crop.x = cxp - (cxp - crop.x) * k; crop.y = cyp - (cyp - crop.y) * k;
+  crop.s *= k; clampCrop(); drawCrop(); }, { passive: false });
+const touches = new Map();
+cv.addEventListener("pointerdown", e => touches.set(e.pointerId, e));
+cv.addEventListener("pointermove", e => {
+  if (!touches.has(e.pointerId)) return;
+  touches.set(e.pointerId, e);
+  if (touches.size === 2) {
+    const [a, b] = [...touches.values()];
+    const d = Math.hypot(a.offsetX - b.offsetX, a.offsetY - b.offsetY);
+    if (pinch) { const k = d / pinch; crop.s *= k; clampCrop(); drawCrop(); }
+    pinch = d; drag = null;
+  }
+});
+cv.addEventListener("pointerup", e => { touches.delete(e.pointerId); pinch = null; });
+
+/* ---------- Quantize + preview + pack (all-integer math) ---------- */
+function quantize() {
+  if (!srcBitmap) return;
+  const r = cropRect();
+  const sx = (r.x - crop.x) / crop.s, sy = (r.y - crop.y) / crop.s;
+  const sw = r.w / crop.s, sh = r.h / crop.s;
+  const off = document.createElement("canvas");
+  off.width = W; off.height = H;
+  const octx = off.getContext("2d", { willReadFrequently: true });
+  octx.imageSmoothingEnabled = true; octx.imageSmoothingQuality = "high";
+  octx.drawImage(srcBitmap, sx, sy, sw, sh, 0, 0, W, H);
+  const img = octx.getImageData(0, 0, W, H).data;
+
+  frameBytes = new Uint8Array(FRAME_BYTES);
+  const errR = new Int32Array(W * H), errG = new Int32Array(W * H), errB = new Int32Array(W * H);
+  const pv = $("prevCv").getContext("2d");
+  const view = pv.createImageData(W, H);
+
+  for (let y = 0; y < H; y++) {
+    const fwd = y % 2 === 0;
+    for (let xi = 0; xi < W; xi++) {
+      const x = fwd ? xi : W - 1 - xi, i = y * W + x, p = i * 4;
+      const r8 = clamp(Math.floor((img[p]   * 16 + errR[i] + 8) / 16));
+      const g8 = clamp(Math.floor((img[p+1] * 16 + errG[i] + 8) / 16));
+      const b8 = clamp(Math.floor((img[p+2] * 16 + errB[i] + 8) / 16));
+      const c = nearest(r8, g8, b8);
+      frameBytes[i >> 2] |= c << (6 - 2 * (i & 3));
+      const er = r8 - PAL_PACK[c][0], eg = g8 - PAL_PACK[c][1], eb = b8 - PAL_PACK[c][2];
+      const xr = fwd ? x + 1 : x - 1, xl = fwd ? x - 1 : x + 1;
+      if (xr >= 0 && xr < W) spread(errR, errG, errB, y * W + xr, er, eg, eb, 7);
+      if (y + 1 < H) {
+        if (xl >= 0 && xl < W) spread(errR, errG, errB, (y+1) * W + xl, er, eg, eb, 3);
+        spread(errR, errG, errB, (y+1) * W + x, er, eg, eb, 5);
+        if (xr >= 0 && xr < W) spread(errR, errG, errB, (y+1) * W + xr, er, eg, eb, 1);
+      }
+      view.data[p]   = PAL_VIEW[c][0];
+      view.data[p+1] = PAL_VIEW[c][1];
+      view.data[p+2] = PAL_VIEW[c][2];
+      view.data[p+3] = 255;
+    }
+  }
+  pv.putImageData(view, 0, 0);
+}
+const clamp = v => v < 0 ? 0 : v > 255 ? 255 : v;
+function nearest(r, g, b) {
+  let best = 0, bd = Infinity;
+  for (let i = 0; i < 4; i++) {
+    const dr = r - PAL_PACK[i][0], dg = g - PAL_PACK[i][1], db = b - PAL_PACK[i][2];
+    const d = 299 * dr * dr + 587 * dg * dg + 114 * db * db;
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
+function spread(errR, errG, errB, i, er, eg, eb, w) {
+  errR[i] += er * w; errG[i] += eg * w; errB[i] += eb * w;
+}
+$("reDither").onclick = quantize;
+
+/* ---------- Upload + status polling ---------- */
+$("sendBtn").onclick = () => {
+  if (!frameBytes) return;
+  $("sendBtn").disabled = true;
+  msg(t("uploading"), "info");
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/display");
+  xhr.setRequestHeader("Content-Type", "application/octet-stream");
+  xhr.upload.onprogress = e => { if (e.lengthComputable)
+    $("bar").style.width = (e.loaded / e.total * 100) + "%"; };
+  xhr.onload = () => {
+    if (xhr.status === 202) {
+      msg(t("accepted"), "info");
+      pollBusy();
+    } else {
+      let s = t("fail") + xhr.status + ")";
+      try { const j = JSON.parse(xhr.responseText);
+            s += "：" + j.error + (j.retry_after_s ? "（" + j.retry_after_s + t("retryIn") + "）" : "");
+      } catch (e) {}
+      msg(s, "err"); $("sendBtn").disabled = false; $("bar").style.width = "0";
+    }
+  };
+  xhr.onerror = () => { msg(t("netErr"), "err"); $("sendBtn").disabled = false; };
+  xhr.send(frameBytes);
+};
+function pollBusy() {
+  fetch("/status").then(r => r.json()).then(s => {
+    if (s.busy) { setTimeout(pollBusy, 2000); return; }
+    $("bar").style.width = "100%";
+    msg(t("done"), "ok");
+    $("sendBtn").disabled = false;
+  }).catch(() => setTimeout(pollBusy, 3000));
+}
+
+/* ---------- Status & AP config ---------- */
+let authOpen = false;
+async function refreshInfo() {
+  try {
+    const s = await (await fetch("/status")).json();
+    $("modeBadge").textContent = s.mode === "ap" ? t("modeAP") : "STA";
+    $("devInfo").textContent = s.board + " · fw " + s.fw + " · " + s.ip;
+    $("statusBox").innerHTML =
+      "<b>" + t("battery") + "</b> " + s.battery_mv + " mV · <b>" + t("refresh") + "</b> " +
+      (s.busy ? t("busy") : t("idle")) +
+      " · <b>" + t("sleepIn") + "</b> " + (s.sleep_in_s ? s.sleep_in_s + " s" : t("awake")) +
+      " · <b>SSID</b> " + s.ssid;
+    if (s.mode === "ap") {
+      const info = await (await fetch("/setup-info")).json();
+      $("apCard").classList.remove("hidden");
+      if (info.token) $("tokenBox").innerHTML = "<b>" + info.token + "</b>";
+      if (info.mdns) window.__mdns = info.mdns;
+      if (info.mac) $("tokenBox").innerHTML += "<br>MAC: " + info.mac +
+        " · AP: " + info.ap_ssid;
+      authOpen = !!info.auth_open;
+      $("openBtn").textContent = authOpen ? t("openOn") : t("openOff");
+    }
+  } catch (e) { $("devInfo").textContent = t("noConn"); }
+}
+$("setupBtn").onclick = async () => {
+  const body = new URLSearchParams({ ssid: $("ssid").value, pass: $("wpass").value });
+  const r = await fetch("/api/setup", { method: "POST", body });
+  alert(r.ok ? t("setupOk").replace("%h", window.__mdns || "inkstone") : t("setupFail"));
+};
+$("apBtn").onclick = async () => {
+  const body = new URLSearchParams({ pass: $("appass").value });
+  const r = await fetch("/api/ap-password", { method: "POST", body });
+  alert(r.ok ? t("apOk") : t("apFail"));
+};
+$("openBtn").onclick = async () => {
+  const r = await fetch("/api/v1/auth", { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ open: !authOpen }) });
+  if (r.ok) { authOpen = !authOpen;
+    $("openBtn").textContent = authOpen ? t("openOn") : t("openOff"); }
+};
+applyLang();
+refreshInfo();
+setInterval(refreshInfo, 15000);
+</script>
+</body>
+</html>

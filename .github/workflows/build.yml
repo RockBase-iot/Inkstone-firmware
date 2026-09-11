@@ -1,0 +1,50 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env_name: [nm-epd-420-4c]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # T2 golden-baseline self-test: byte-exact packing verification
+      - name: Converter self-test
+        run: |
+          pip install pillow
+          python tools/convert_image.py --selftest
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build firmware (${{ matrix.env_name }})
+        run: pio run -e ${{ matrix.env_name }}
+
+      - name: Upload merged bin
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkstone-${{ matrix.env_name }}.bin
+          path: inkstone-${{ matrix.env_name }}.bin
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: inkstone-${{ matrix.env_name }}.bin

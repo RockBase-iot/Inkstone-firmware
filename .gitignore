@@ -1,0 +1,14 @@
+# PlatformIO
+.pio/
+*.bin
+
+# build artifacts
+src/net/embedded_page.h
+
+# Python
+__pycache__/
+*.pyc
+
+# OS / IDE
+.vscode/
+.DS_Store
