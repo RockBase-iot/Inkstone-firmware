@@ -13,9 +13,9 @@ jobs:
       matrix:
         env_name: [nm-epd-420-4c]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -26,19 +26,21 @@ jobs:
           python tools/convert_image.py --selftest
 
       - name: Cache PlatformIO
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install platformio
+        # click>=8.2 breaks the pioarduino-bundled esptool (cli_util.py calls
+        # ParamType.get_metavar with the old signature); pin until fixed upstream
+        run: pip install platformio "click<8.2"
 
       - name: Build firmware (${{ matrix.env_name }})
         run: pio run -e ${{ matrix.env_name }}
 
       - name: Upload merged bin
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: inkstone-${{ matrix.env_name }}.bin
           path: inkstone-${{ matrix.env_name }}.bin
