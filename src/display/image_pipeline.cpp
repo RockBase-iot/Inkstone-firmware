@@ -1,6 +1,7 @@
 // Copyright (c) 2026 RockBase-IoT, Chengdu Rockbase Co., Ltd. All rights reserved.
 
 #include "display/image_pipeline.h"
+#include "display/retro_quantize.h"
 #include "boards/board.h"
 
 #include <JPEGDEC.h>
@@ -90,8 +91,8 @@ static void quantizePack(const uint8_t* rgb, uint8_t* out, bool dither) {
 }
 
 // ─── RGB565 -> center-crop 4:3 -> scale to panel size -> quantize + pack ────
-bool composeFrame(const uint16_t* src, int srcW, int srcH,
-                  uint8_t* out, bool dither) {
+static bool composeFrameImpl(const uint16_t* src, int srcW, int srcH,
+                             uint8_t* out, Profile prof) {
     if (!src || srcW <= 0 || srcH <= 0) return false;
 
     // Center-crop to 4:3 (EPD_WIDTH:EPD_HEIGHT)
@@ -116,9 +117,24 @@ bool composeFrame(const uint16_t* src, int srcW, int srcH,
             rgb[i + 2] = (uint8_t)((p & 0x1F) * 255 / 31);
         }
     }
-    quantizePack(rgb, out, dither);
+    // RETRO lives in its own translation unit and never touches the DEFAULT
+    // code path below, so the legacy output stays byte-identical.
+    bool ok = (prof == Profile::IPP_RETRO)
+                  ? retro::quantizePack(rgb, out, true)
+                  : (quantizePack(rgb, out, prof != Profile::IPP_NONE), true);
     free(rgb);
-    return true;
+    return ok;
+}
+
+bool composeFrame(const uint16_t* src, int srcW, int srcH,
+                  uint8_t* out, bool dither) {
+    return composeFrameImpl(src, srcW, srcH, out,
+                            dither ? Profile::IPP_DEFAULT : Profile::IPP_NONE);
+}
+
+bool composeFrame(const uint16_t* src, int srcW, int srcH,
+                  uint8_t* out, Profile p) {
+    return composeFrameImpl(src, srcW, srcH, out, p);
 }
 
 // ─── JPEG decode ────────────────────────────────────────────────────────────
@@ -134,7 +150,7 @@ static int jpegDraw(JPEGDRAW* d) {
     return 1;
 }
 
-bool convertJpeg(const uint8_t* data, size_t len, uint8_t* out, bool dither) {
+bool convertJpeg(const uint8_t* data, size_t len, uint8_t* out, Profile prof) {
     JPEGDEC jpeg;
     if (!jpeg.openRAM(const_cast<uint8_t*>(data), len, jpegDraw)) {
         Serial.println("[img] JPEG open failed");
@@ -148,9 +164,14 @@ bool convertJpeg(const uint8_t* data, size_t len, uint8_t* out, bool dither) {
     jpeg.setPixelType(RGB565_LITTLE_ENDIAN);
     bool ok = jpeg.decode(0, 0, 0) == 1;
     jpeg.close();
-    if (ok) ok = composeFrame(buf, w, h, out, dither);
+    if (ok) ok = composeFrame(buf, w, h, out, prof);
     free(buf);
     return ok;
+}
+
+bool convertJpeg(const uint8_t* data, size_t len, uint8_t* out, bool dither) {
+    return convertJpeg(data, len, out,
+                       dither ? Profile::IPP_DEFAULT : Profile::IPP_NONE);
 }
 
 // ─── PNG decode ─────────────────────────────────────────────────────────────
@@ -163,7 +184,7 @@ static int pngDraw(PNGDRAW* d) {
     return 1;
 }
 
-bool convertPng(const uint8_t* data, size_t len, uint8_t* out, bool dither) {
+bool convertPng(const uint8_t* data, size_t len, uint8_t* out, Profile prof) {
     PNG png;
     if (!png.openRAM(const_cast<uint8_t*>(data), len, pngDraw)) {
         Serial.println("[img] PNG open failed");
@@ -175,9 +196,23 @@ bool convertPng(const uint8_t* data, size_t len, uint8_t* out, bool dither) {
     PngCtx ctx{&png, buf, w};
     bool ok = png.decode(&ctx, 0) == PNG_SUCCESS;
     png.close();
-    if (ok) ok = composeFrame(buf, w, h, out, dither);
+    if (ok) ok = composeFrame(buf, w, h, out, prof);
     free(buf);
     return ok;
+}
+
+bool convertPng(const uint8_t* data, size_t len, uint8_t* out, bool dither) {
+    return convertPng(data, len, out,
+                      dither ? Profile::IPP_DEFAULT : Profile::IPP_NONE);
+}
+
+// ─── Profile token parsing (shared by the HTTP layer) ──────────────────────
+bool parseProfile(const char* token, Profile* out) {
+    if (!token || !out) return false;
+    if (strcmp(token, "none")    == 0) { *out = Profile::IPP_NONE;    return true; }
+    if (strcmp(token, "default") == 0) { *out = Profile::IPP_DEFAULT; return true; }
+    if (strcmp(token, "retro")   == 0) { *out = Profile::IPP_RETRO;   return true; }
+    return false;
 }
 
 } // namespace imagepipe

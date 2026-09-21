@@ -32,7 +32,7 @@ String ip();         // current IP as string
 String ssid();       // STA: connected SSID; AP: hotspot name
 String apSsid();     // AP hotspot name (Inkstone-XXXXXX, XXXXXX = last 3 STA MAC bytes, uppercase hex)
 String macAddress(); // device STA MAC ("AA:BB:CC:DD:EE:FF")
-String mdnsHost();   // full mDNS hostname (inkstone-xxxxxx)
+String mdnsHost();   // full mDNS hostname (inkstone)
 bool isConnected();
 
 // Provisioning: save credentials and reboot into STA (web form /api/setup)

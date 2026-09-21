@@ -106,12 +106,27 @@ static void handleDisplay() {
     }
 
     String ct = s_srv->header("Content-Type");
-    bool dither = s_srv->arg("dither") != "off";   // FS dither on by default for JPEG/PNG
+
+    // Quantization profile. `profile` wins over the legacy `dither` flag, which
+    // is kept so old clients and the ?dither=off spelling keep working.
+    imagepipe::Profile prof = imagepipe::Profile::IPP_DEFAULT;
+    String pArg = s_srv->arg("profile");
+    if (pArg.length() > 0) {
+        if (!imagepipe::parseProfile(pArg.c_str(), &prof)) {
+            sendJson(400, "{\"error\":\"profile must be default|retro|none\"}");
+            return;
+        }
+    } else if (s_srv->arg("dither") == "off") {
+        prof = imagepipe::Profile::IPP_NONE;
+    }
+
     uint8_t* frame = (uint8_t*)ps_malloc(EPD_FRAME_BYTES);
     if (!frame) { sendJson(500, "{\"error\":\"oom\"}"); return; }
 
     bool ok = false;
     if (ct.startsWith("application/octet-stream")) {
+        // Already-quantized raw frame: `profile` is meaningless here, the
+        // client (e.g. web/uploader.html) did the quantization itself.
         if (s_imgLen != EPD_FRAME_BYTES) {
             sendJson(400, "{\"error\":\"raw frame must be exactly 30000 bytes\"}");
             free(frame);
@@ -120,9 +135,9 @@ static void handleDisplay() {
         memcpy(frame, s_imgBuf, EPD_FRAME_BYTES);
         ok = true;
     } else if (ct.startsWith("image/jpeg")) {
-        ok = imagepipe::convertJpeg(s_imgBuf, s_imgLen, frame, dither);
+        ok = imagepipe::convertJpeg(s_imgBuf, s_imgLen, frame, prof);
     } else if (ct.startsWith("image/png")) {
-        ok = imagepipe::convertPng(s_imgBuf, s_imgLen, frame, dither);
+        ok = imagepipe::convertPng(s_imgBuf, s_imgLen, frame, prof);
     } else {
         sendJson(415, "{\"error\":\"supported: application/octet-stream, image/jpeg, image/png\"}");
         free(frame);
@@ -131,7 +146,14 @@ static void handleDisplay() {
 
     if (!ok) {
         free(frame);
-        sendJson(422, "{\"error\":\"decode/quantize failed\"}");
+        if (prof == imagepipe::Profile::IPP_RETRO) {
+            // RETRO holds work+mask+err at once (~1.9 MB); PSRAM exhaustion is
+            // the realistic failure mode, so name it.
+            sendJson(422, "{\"error\":\"decode/quantize failed\","
+                          "\"hint\":\"retro requires more PSRAM\"}");
+        } else {
+            sendJson(422, "{\"error\":\"decode/quantize failed\"}");
+        }
         return;
     }
     if (!display::submitFrame(frame, EPD_FRAME_BYTES)) {
@@ -149,12 +171,13 @@ static void handleStatus() {
     if (!requireAuth()) return;
 
     const sleepman::Params& p = sleepman::params();
-    char buf[512];
+    char buf[640];
     snprintf(buf, sizeof(buf),
         "{\"busy\":%s,\"last_update\":%u,\"battery_mv\":%u,"
         "\"ip\":\"%s\",\"ssid\":\"%s\",\"mode\":\"%s\",\"sleep_in_s\":%u,"
         "\"min_interval_s\":%u,\"next_allowed_update\":%u,"
-        "\"stay_awake\":%s,\"boot_count\":%u}",
+        "\"stay_awake\":%s,\"boot_count\":%u,"
+        "\"profiles\":[\"default\",\"retro\",\"none\"]}",
         display::isBusy() ? "true" : "false",
         display::lastRefreshEpoch(),
         battery::readMv(),

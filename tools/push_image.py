@@ -3,7 +3,7 @@
 push_image.py — AI / script call example: image -> raw -> POST /api/v1/display
 
 Usage:
-  python tools/push_image.py photo.jpg --token <32hex> [--host inkstone-xxxxxx.local]
+    python tools/push_image.py photo.jpg --token <32hex> [--host inkstone.local]
   python tools/push_image.py photo.jpg                            # open mode, no token
   python tools/push_image.py photo.jpg --token <t> --direct-jpeg  # on-device decode
 
@@ -28,7 +28,7 @@ def main() -> int:
     ap.add_argument("--token", default="",
                     help="API token; optional once open mode is enabled (/api/v1/auth open)")
     ap.add_argument("--host", default="inkstone.local",
-                    help="device host, e.g. inkstone-2bf864.local (suffix = last 3 MAC bytes)")
+                    help="device host, e.g. inkstone.local")
     ap.add_argument("--direct-jpeg", action="store_true",
                     help="send the JPEG as-is; device decodes + FS-dithers")
     args = ap.parse_args()

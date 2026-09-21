@@ -36,12 +36,32 @@
   .badge { display:inline-block; background:var(--ink); color:#fff; font-size:11px;
            border-radius:4px; padding:1px 6px; margin-left:6px; vertical-align:2px; }
   .langbtn { float:right; }
+
+  /* ---- side-by-side double preview ---- */
+  .pv-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px; }
+  .pv-pane { border:1px solid var(--line); border-radius:8px; padding:10px; background:#fbfaf6; }
+  .pv-pane.sel { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+  .pv-head { display:flex; align-items:baseline; gap:6px; flex-wrap:wrap; margin-bottom:2px; }
+  .pv-title { font-size:14px; font-weight:600; }
+  .pv-note { font-size:11px; color:#888; }
+  .pv-pane canvas { width:100%; height:auto; margin-top:8px; border-radius:4px;
+                    image-rendering:auto; touch-action:auto; }
+  .pv-pick { width:100%; margin-top:8px; padding:9px 10px; font-size:13px; }
+  .pv-pick.ghost { background:#fff; }
+  .pv-pane.busy canvas { opacity:.45; }
+  @media (max-width:640px) { .pv-grid { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
 <button class="ghost langbtn" id="langBtn">中文</button>
 <h1><span data-i18n="title">Inkstone Image Push</span><span class="badge" id="modeBadge">…</span></h1>
 <div class="sub" id="devInfo">…</div>
+
+<!-- The RETRO quantizer. Loaded as a classic script (not a module) so its
+     top-level functions become globals the inline script below can call.
+     scripts/gen_embedded_page.py inlines this into the served HTML at build
+     time; when developing, open this file directly and it loads as a sibling. -->
+<script src="retro_core.js"></script>
 
 <!-- 1. Pick image -->
 <div class="card">
@@ -55,19 +75,43 @@
   <canvas id="cropCv" width="640" height="360"></canvas>
 </div>
 
-<!-- 3. Preview -->
+<!-- 3. Preview: DEFAULT vs RETRO, side by side -->
 <div class="card hidden" id="prevCard">
-  <h2 data-i18n="s3">3 · 4-color preview (close to real panel tone)</h2>
-  <canvas id="prevCv" width="400" height="300"></canvas>
+  <h2 data-i18n="s3">3 · Compare two algorithms, then pick one</h2>
   <div class="row">
     <button class="ghost" id="reDither" data-i18n="redither">Re-quantize</button>
+    <span class="pv-note" id="pvNote"></span>
   </div>
+  <div class="pv-grid">
+    <div class="pv-pane" id="paneDefault">
+      <div class="pv-head">
+        <span class="pv-title" data-i18n="algoDefault">DEFAULT · faithful</span>
+        <span class="pv-note" data-i18n="algoDefaultNote">Floyd–Steinberg</span>
+      </div>
+      <canvas id="prevDefault" width="400" height="300"></canvas>
+      <button type="button" class="pv-pick ghost" data-profile="default"
+              data-i18n="useDefault">Use this one</button>
+    </div>
+    <div class="pv-pane" id="paneRetro">
+      <div class="pv-head">
+        <span class="pv-title" data-i18n="algoRetro">RETRO · vintage</span>
+        <span class="pv-note" data-i18n="algoRetroNote">OKLab + hue mask</span>
+      </div>
+      <canvas id="prevRetro" width="400" height="300"></canvas>
+      <button type="button" class="pv-pick ghost" data-profile="retro"
+              data-i18n="useRetro">Use this one</button>
+    </div>
+  </div>
+  <div class="row" id="nudgeRow"></div>
 </div>
 
 <!-- 4. Upload -->
 <div class="card hidden" id="upCard">
   <h2 data-i18n="s4">4 · Push to device</h2>
-  <div class="row"><button id="sendBtn" data-i18n="send">Show on display (~30 s)</button></div>
+  <div class="row">
+    <button id="sendBtn" data-i18n="send">Show on display (~30 s)</button>
+    <span class="pv-note" id="chosenNote"></span>
+  </div>
   <div class="bar"><i id="bar"></i></div>
   <div id="msg" class="info"></div>
 </div>
@@ -108,8 +152,15 @@ const I18N = {
     title:"Inkstone Image Push", s1:"1 · Pick an image",
     drop:"Click or drag an image here",
     s2:"2 · Crop (fixed 4:3 · drag to move · wheel / pinch to zoom)",
-    s3:"3 · 4-color preview (close to real panel tone)", redither:"Re-quantize",
+    s3:"3 · Compare two algorithms, then pick one", redither:"Re-quantize",
     s4:"4 · Push to device", send:"Show on display (~30 s)",
+    algoDefault:"DEFAULT · faithful", algoDefaultNote:"Floyd–Steinberg",
+    algoRetro:"RETRO · vintage", algoRetroNote:"OKLab + hue mask",
+    useDefault:"Use this one", useRetro:"Use this one",
+    chosenMark:"Selected ✓",
+    chosen:"Will push: ", chosenNone:"Pick one above first",
+    quantizing:"Quantizing…", quantizingRetro:"Quantizing RETRO…", quantizingDefault:"Quantizing DEFAULT…",
+    quantized:"Both previews ready",
     status:"Device status", wifi:"Wi-Fi setup (join home network)",
     ssidPh:"Wi-Fi name (SSID)", wpassPh:"Wi-Fi password", setupBtn:"Save & reboot",
     appw:"Hotspot password", appassPh:"New hotspot password (≥8 chars, after reboot)",
@@ -134,8 +185,15 @@ const I18N = {
     title:"Inkstone Firmware 本地图传", s1:"1 · 选择图片",
     drop:"点击选择或拖拽图片到这里",
     s2:"2 · 裁剪（4:3 固定比例，拖动移动 · 滚轮/双指缩放）",
-    s3:"3 · 四色效果预览（贴近真机哑光发色）", redither:"重新量化",
+    s3:"3 · 并排对比两种算法，选一个推送", redither:"重新量化",
     s4:"4 · 上传到设备", send:"刷屏显示（约 30 秒）",
+    algoDefault:"DEFAULT · 保真", algoDefaultNote:"Floyd–Steinberg",
+    algoRetro:"RETRO · 复古", algoRetroNote:"OKLab + 色相掩码",
+    useDefault:"用这个推送", useRetro:"用这个推送",
+    chosenMark:"已选中 ✓",
+    chosen:"将推送：", chosenNone:"请先在上方选一个",
+    quantizing:"量化中…", quantizingRetro:"量化 RETRO 中…", quantizingDefault:"量化 DEFAULT 中…",
+    quantized:"两个预览都已就绪",
     status:"设备状态", wifi:"配网（连接到家里 Wi-Fi）",
     ssidPh:"Wi-Fi 名称 (SSID)", wpassPh:"Wi-Fi 密码", setupBtn:"保存并重启",
     appw:"热点密码", appassPh:"新热点密码（≥8 位，重启生效）",
@@ -174,17 +232,27 @@ $("langBtn").onclick = () => {
 };
 
 /* ================= Pixel format (§3, byte-identical to tools/convert_image.py) ====
-   Palette (packed RGB): black(0,0,0) white(255,255,255) yellow(255,210,0) red(200,30,30)
+   DEFAULT profile — implemented inline below, and the DECODED CANVAS is what
+   gets pushed. Palette (packed RGB): black(0,0,0) white(255,255,255)
+   yellow(255,210,0) red(200,30,30)
    Distance: d = 299*dr² + 587*dg² + 114*db² (integer)
    Dithering: Floyd-Steinberg serpentine, error /16 integer accumulation,
               weights: right 7, lower-left 3, below 5, lower-right 1
-   Packing: byte = c0<<6 | c1<<4 | c2<<2 | c3, row-major, 30000 bytes total   */
+   Packing: byte = c0<<6 | c1<<4 | c2<<2 | c3, row-major, 30000 bytes total
+
+   RETRO profile — lives in web/retro_core.js (inlined into this page by
+   scripts/gen_embedded_page.py at build time) so the browser and the parity
+   checker share ONE implementation. The two profiles keep separate preview
+   palettes: RETRO's is RETRO_PAL_VIEW inside retro_core.js, and DEFAULT's is
+   PAL_VIEW below. Preview colours never reach the wire.                        */
 const W = 400, H = 300, FRAME_BYTES = 30000;
 const PAL_PACK = [[0,0,0],[255,255,255],[255,210,0],[200,30,30]];
 const PAL_VIEW = [[20,20,20],[245,243,235],[225,190,25],[185,45,40]];
 
 let srcBitmap = null;
-let frameBytes = null;
+/* One pre-quantized frame per profile, and which one the user picked. */
+let frames = { default: null, retro: null };
+let chosen = "default";
 
 /* ---------- Pick image ---------- */
 const drop = $("drop"), file = $("file");
@@ -269,9 +337,11 @@ cv.addEventListener("pointermove", e => {
 });
 cv.addEventListener("pointerup", e => { touches.delete(e.pointerId); pinch = null; });
 
-/* ---------- Quantize + preview + pack (all-integer math) ---------- */
-function quantize() {
-  if (!srcBitmap) return;
+/* ---------- Crop → 400x300 RGB888, shared by both profiles ---------- */
+/* Cropping and scaling happen once; the two quantizers then consume the same
+   pixel buffer. Re-running it per profile would be both slower and a source of
+   drift between the previews. */
+function renderCropped() {
   const r = cropRect();
   const sx = (r.x - crop.x) / crop.s, sy = (r.y - crop.y) / crop.s;
   const sw = r.w / crop.s, sh = r.h / crop.s;
@@ -280,13 +350,62 @@ function quantize() {
   const octx = off.getContext("2d", { willReadFrequently: true });
   octx.imageSmoothingEnabled = true; octx.imageSmoothingQuality = "high";
   octx.drawImage(srcBitmap, sx, sy, sw, sh, 0, 0, W, H);
-  const img = octx.getImageData(0, 0, W, H).data;
+  return octx.getImageData(0, 0, W, H);
+}
 
-  frameBytes = new Uint8Array(FRAME_BYTES);
+/* Paint a packed 2bpp frame through a preview palette. */
+function paint(cvId, frame, palView) {
+  const ctx = $(cvId).getContext("2d");
+  const img = ctx.createImageData(W, H);
+  const d = img.data;
+  for (let i = 0; i < W * H; i++) {
+    const c = (frame[i >> 2] >> (6 - 2 * (i & 3))) & 3;
+    const p = i * 4, v = palView[c];
+    d[p] = v[0]; d[p + 1] = v[1]; d[p + 2] = v[2]; d[p + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function paintRetro(cvId, frame) {
+  $(cvId).getContext("2d").putImageData(retroFrameToImageData(frame), 0, 0);
+}
+
+/* ---------- Quantize both profiles + preview ---------- */
+function quantize() {
+  if (!srcBitmap) return;
+  const t0 = performance.now();
+  const src = renderCropped();
+  const rgb = new Uint8ClampedArray(W * H * 3);
+  for (let i = 0; i < W * H; i++) {
+    const rgba = i * 4, rgbOffset = i * 3;
+    rgb[rgbOffset] = src.data[rgba];
+    rgb[rgbOffset + 1] = src.data[rgba + 1];
+    rgb[rgbOffset + 2] = src.data[rgba + 2];
+  }
+
+  /* DEFAULT: the original all-integer path, unchanged. Its frame is what the
+     page has always pushed and is byte-identical to the firmware's. */
+  msg(t("quantizingDefault"), "info");
+  frames.default = quantizeDefault(src.data);
+  paint("prevDefault", frames.default, PAL_VIEW);
+
+  /* RETRO: one shared implementation with the parity checker. It is far
+     heavier (OKLab per pixel), so announce it before blocking the thread. */
+  msg(t("quantizingRetro"), "info");
+  frames.retro = retroQuantize(rgb, true);
+  paintRetro("prevRetro", frames.retro);
+
+  const ms = Math.round(performance.now() - t0);
+  msg(t("quantized") + " · " + ms + " ms", "ok");
+  updateChosen();
+}
+
+/* The original integer Floyd-Steinberg. Takes raw RGBA (canvas ImageData) and
+   returns the packed frame. Left exactly as it was before the double preview -
+   this is the path whose bytes the firmware also produces. */
+function quantizeDefault(img) {
+  const frame = new Uint8Array(FRAME_BYTES);
   const errR = new Int32Array(W * H), errG = new Int32Array(W * H), errB = new Int32Array(W * H);
-  const pv = $("prevCv").getContext("2d");
-  const view = pv.createImageData(W, H);
-
   for (let y = 0; y < H; y++) {
     const fwd = y % 2 === 0;
     for (let xi = 0; xi < W; xi++) {
@@ -295,7 +414,7 @@ function quantize() {
       const g8 = clamp(Math.floor((img[p+1] * 16 + errG[i] + 8) / 16));
       const b8 = clamp(Math.floor((img[p+2] * 16 + errB[i] + 8) / 16));
       const c = nearest(r8, g8, b8);
-      frameBytes[i >> 2] |= c << (6 - 2 * (i & 3));
+      frame[i >> 2] |= c << (6 - 2 * (i & 3));
       const er = r8 - PAL_PACK[c][0], eg = g8 - PAL_PACK[c][1], eb = b8 - PAL_PACK[c][2];
       const xr = fwd ? x + 1 : x - 1, xl = fwd ? x - 1 : x + 1;
       if (xr >= 0 && xr < W) spread(errR, errG, errB, y * W + xr, er, eg, eb, 7);
@@ -304,13 +423,9 @@ function quantize() {
         spread(errR, errG, errB, (y+1) * W + x, er, eg, eb, 5);
         if (xr >= 0 && xr < W) spread(errR, errG, errB, (y+1) * W + xr, er, eg, eb, 1);
       }
-      view.data[p]   = PAL_VIEW[c][0];
-      view.data[p+1] = PAL_VIEW[c][1];
-      view.data[p+2] = PAL_VIEW[c][2];
-      view.data[p+3] = 255;
     }
   }
-  pv.putImageData(view, 0, 0);
+  return frame;
 }
 const clamp = v => v < 0 ? 0 : v > 255 ? 255 : v;
 function nearest(r, g, b) {
@@ -327,13 +442,41 @@ function spread(errR, errG, errB, i, er, eg, eb, w) {
 }
 $("reDither").onclick = quantize;
 
+/* ---------- Profile picking ---------- */
+function updateChosen() {
+  const panes = { default: $("paneDefault"), retro: $("paneRetro") };
+  Object.keys(panes).forEach(k => panes[k].classList.toggle("sel", k === chosen));
+  document.querySelectorAll(".pv-pick").forEach(b => {
+    const on = b.dataset.profile === chosen;
+    b.classList.toggle("ghost", !on);
+    b.textContent = t(on ? "chosenMark"
+                         : (b.dataset.profile === "retro" ? "useRetro" : "useDefault"));
+  });
+  $("chosenNote").textContent = frames[chosen]
+    ? t("chosen") + t(chosen === "retro" ? "algoRetro" : "algoDefault")
+    : "";
+}
+document.querySelectorAll(".pv-pick").forEach(btn => {
+  btn.addEventListener("click", () => {
+    chosen = btn.dataset.profile;
+    if (!frames[chosen]) { msg(t("chosenNone"), "err"); return; }
+    updateChosen();
+    $("upCard").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
+});
+
 /* ---------- Upload + status polling ---------- */
 $("sendBtn").onclick = () => {
-  if (!frameBytes) return;
+  const frame = frames[chosen];
+  if (!frame) { msg(t("chosenNone"), "err"); return; }
   $("sendBtn").disabled = true;
   msg(t("uploading"), "info");
   const xhr = new XMLHttpRequest();
-  xhr.open("POST", "/display");
+  /* Push the frame we already quantized. The device accepts
+     application/octet-stream as an already-packed frame and ignores the profile
+     query there, but sending it keeps server logs and any future
+     server-side validation aligned with what the user picked. */
+  xhr.open("POST", "/display?profile=" + encodeURIComponent(chosen));
   xhr.setRequestHeader("Content-Type", "application/octet-stream");
   xhr.upload.onprogress = e => { if (e.lengthComputable)
     $("bar").style.width = (e.loaded / e.total * 100) + "%"; };
@@ -350,7 +493,7 @@ $("sendBtn").onclick = () => {
     }
   };
   xhr.onerror = () => { msg(t("netErr"), "err"); $("sendBtn").disabled = false; };
-  xhr.send(frameBytes);
+  xhr.send(frame);
 };
 function pollBusy() {
   fetch("/status").then(r => r.json()).then(s => {

@@ -23,6 +23,21 @@
 
 namespace imagepipe {
 
+// Quantization profile. Values are the public `?profile=` tokens.
+//
+// The enumerators carry an IPP_ prefix because <Arduino.h> does
+//     #define DEFAULT 1
+// so a plain `DEFAULT` here is textually replaced by `1` and the enum fails to
+// compile ("expected identifier before numeric constant"), taking every
+// translation unit that includes this header down with it. Name them IPP_NONE /
+// IPP_DEFAULT / IPP_RETRO; the wire tokens stay "none" / "default" / "retro" and
+// are mapped in parseProfile().
+enum class Profile : uint8_t {
+    IPP_NONE    = 0,   // nearest colour, no diffusion
+    IPP_DEFAULT = 1,   // existing luma-weighted Floyd-Steinberg (byte-stable)
+    IPP_RETRO   = 2,   // OKLab + hue-aware masking + serpentine Atkinson
+};
+
 // Decode JPEG/PNG and convert into an EPD_FRAME_BYTES 2bpp frame at out.
 // dither=true (default) applies Floyd-Steinberg; false is plain nearest-color.
 // Returns true on success; failures are logged to serial.
@@ -33,5 +48,18 @@ bool convertPng (const uint8_t* data, size_t len, uint8_t* out, bool dither = tr
 // (shared by the decoders and tests).
 bool composeFrame(const uint16_t* rgb565, int srcW, int srcH,
                   uint8_t* out, bool dither);
+
+// ─── Profile-aware overloads ───────────────────────────────────────────────
+// Added alongside the legacy bool form rather than replacing it, so existing
+// call sites keep their exact behaviour. Profile::IPP_NONE/DEFAULT map onto
+// dither=false/true; Profile::IPP_RETRO dispatches into the isolated retro_*
+// module (see display/retro_quantize.h).
+bool convertJpeg(const uint8_t* data, size_t len, uint8_t* out, Profile p);
+bool convertPng (const uint8_t* data, size_t len, uint8_t* out, Profile p);
+bool composeFrame(const uint16_t* rgb565, int srcW, int srcH,
+                  uint8_t* out, Profile p);
+
+// Profile token <-> enum. Returns false for an unrecognised token.
+bool parseProfile(const char* token, Profile* out);
 
 } // namespace imagepipe

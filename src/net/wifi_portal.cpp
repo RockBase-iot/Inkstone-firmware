@@ -22,7 +22,7 @@ static String     s_ssid;
 static String     s_mac;       // "AA:BB:CC:DD:EE:FF"
 static String     s_macTail;   // last 3 MAC bytes, uppercase hex, e.g. "2BF864"
 static String     s_apSsid;    // Inkstone-XXXXXX
-static String     s_mdnsHost;  // inkstone-xxxxxx
+static String     s_mdnsHost;  // inkstone
 static uint32_t   s_bootPressedAt = 0;
 
 static Preferences& prefs() {
@@ -107,7 +107,7 @@ Mode begin() {
     snprintf(tail, sizeof(tail), "%02X%02X%02X", mac[3], mac[4], mac[5]);
     s_macTail  = tail;
     s_apSsid   = String(BOARD_AP_SSID_PREFIX) + s_macTail;
-    s_mdnsHost = String(BOARD_MDNS_HOST) + "-" + s_macTail;
+    s_mdnsHost = String(BOARD_MDNS_HOST);
     s_mdnsHost.toLowerCase();
     Serial.printf("[wifi] MAC=%s  AP=%s  mDNS=%s.local\n",
                   s_mac.c_str(), s_apSsid.c_str(), s_mdnsHost.c_str());

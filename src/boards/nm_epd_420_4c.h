@@ -13,7 +13,7 @@
 // ============================================================================
 
 #define BOARD_NAME       "NM-EPD-420-4C"
-#define BOARD_MDNS_HOST  "inkstone"           // MAC suffix appended at runtime -> inkstone-a1b2c3.local
+#define BOARD_MDNS_HOST  "inkstone"           // fixed runtime hostname -> inkstone.local
 #define BOARD_AP_SSID_PREFIX "Inkstone-"      // last 3 MAC bytes (uppercase hex) appended at runtime
 #define BOARD_AP_DEFAULT_PASS "12345678"      // changeable on the page, stored in NVS
 
