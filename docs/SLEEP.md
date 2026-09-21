@@ -15,7 +15,7 @@ DEEP_SLEEP → BOOT key (ext0) wakes back to AWAKE;
              timer wake is reserved for pull mode
 ```
 
-## Default parameters (overridable via API/NVS)
+## Default parameters (overridable via `POST /api/v1/sleep` and persisted in NVS)
 
 | parameter | default | meaning |
 |---|---|---|
@@ -41,10 +41,10 @@ DEEP_SLEEP → BOOT key (ext0) wakes back to AWAKE;
 ## Frame persistence (cold boot)
 
 Each successful user-requested refresh is cached to the dedicated 2MB raw
-flash partition `frame` (with a magic + length + CRC32 header). On cold boot
+flash partition `frame` (with a magic + length + CRC32 header). On cold boot,
 the cached frame is displayed again; if no cache exists (or the CRC check
-fails), the built-in 4-color test pattern is shown. After deep sleep the
-panel retains its image, so no refresh happens on wake.
+fails), the built-in 4-color test pattern is shown. After deep sleep the panel
+retains its image, so no refresh happens on wake.
 
 ## Usage notes
 
@@ -72,7 +72,7 @@ panel retains its image, so no refresh happens on wake.
 DEEP_SLEEP → BOOT 键（ext0）唤醒回 AWAKE；定时唤醒为 pull 模式预留
 ```
 
-## 默认参数（API/NVS 可覆盖）
+## 默认参数（可通过 `POST /api/v1/sleep` 覆盖并持久化到 NVS）
 
 | 参数 | 默认 | 说明 |
 |---|---|---|

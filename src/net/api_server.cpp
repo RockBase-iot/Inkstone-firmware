@@ -9,6 +9,8 @@
 #include "power/battery.h"
 
 #include <Preferences.h>
+#include <ctype.h>
+#include <limits.h>
 
 namespace api {
 
@@ -51,6 +53,60 @@ static bool requireAuth() {
 
 static void sendJson(int code, const String& body) {
     s_srv->send(code, "application/json", body);
+}
+
+enum class JsonField : int8_t { INVALID = -1, ABSENT = 0, PRESENT = 1 };
+
+static JsonField jsonUInt(const String& body, const char* name, uint32_t* value) {
+    int key = body.indexOf(String("\"") + name + "\"");
+    if (key < 0) return JsonField::ABSENT;
+    int colon = body.indexOf(':', key);
+    if (colon < 0) return JsonField::INVALID;
+    const char* p = body.c_str() + colon + 1;
+    while (isspace((unsigned char)*p)) ++p;
+    if (*p < '0' || *p > '9') return JsonField::INVALID;
+    uint64_t parsed = 0;
+    while (*p >= '0' && *p <= '9') {
+        parsed = parsed * 10 + (uint64_t)(*p++ - '0');
+        if (parsed > UINT32_MAX) return JsonField::INVALID;
+    }
+    while (isspace((unsigned char)*p)) ++p;
+    if (*p != ',' && *p != '}' && *p != '\0') return JsonField::INVALID;
+    *value = (uint32_t)parsed;
+    return JsonField::PRESENT;
+}
+
+static JsonField jsonBool(const String& body, const char* name, bool* value) {
+    int key = body.indexOf(String("\"") + name + "\"");
+    if (key < 0) return JsonField::ABSENT;
+    int colon = body.indexOf(':', key);
+    if (colon < 0) return JsonField::INVALID;
+    const char* p = body.c_str() + colon + 1;
+    while (isspace((unsigned char)*p)) ++p;
+    if (strncmp(p, "true", 4) == 0) {
+        *value = true;
+        p += 4;
+    } else if (strncmp(p, "false", 5) == 0) {
+        *value = false;
+        p += 5;
+    } else {
+        return JsonField::INVALID;
+    }
+    while (isspace((unsigned char)*p)) ++p;
+    return (*p == ',' || *p == '}' || *p == '\0') ? JsonField::PRESENT
+                                                    : JsonField::INVALID;
+}
+
+static String sleepParamsJson(const sleepman::Params& p) {
+    char buf[224];
+    snprintf(buf, sizeof(buf),
+             "{\"idle_timeout_s\":%u,\"post_refresh_grace_s\":%u,"
+             "\"min_refresh_interval_s\":%u,\"sched_wake_s\":%u,"
+             "\"batt_low_mv\":%u}",
+             (unsigned)p.idleTimeoutS, (unsigned)p.postRefreshGraceS,
+             (unsigned)p.minRefreshIntervalS, (unsigned)p.schedWakeS,
+             (unsigned)p.battLowMv);
+    return String(buf);
 }
 
 // ─── POST /api/v1/display ───────────────────────────────────────────────────
@@ -175,22 +231,28 @@ static void handleStatus() {
     snprintf(buf, sizeof(buf),
         "{\"busy\":%s,\"last_update\":%u,\"battery_mv\":%u,"
         "\"ip\":\"%s\",\"ssid\":\"%s\",\"mode\":\"%s\",\"sleep_in_s\":%u,"
-        "\"min_interval_s\":%u,\"next_allowed_update\":%u,"
+        "\"min_interval_s\":%u,\"idle_timeout_s\":%u,"
+        "\"post_refresh_grace_s\":%u,\"sched_wake_s\":%u,\"batt_low_mv\":%u,"
+        "\"next_allowed_update\":%u,"
         "\"stay_awake\":%s,\"boot_count\":%u,"
         "\"profiles\":[\"default\",\"retro\",\"none\"]}",
         display::isBusy() ? "true" : "false",
-        display::lastRefreshEpoch(),
-        battery::readMv(),
+        (unsigned)display::lastRefreshEpoch(),
+        (unsigned)battery::readMv(),
         wifiportal::ip().c_str(),
         wifiportal::ssid().c_str(),
         wifiportal::mode() == wifiportal::Mode::STA ? "sta" : "ap",
-        sleepman::sleepInS(),
-        p.minRefreshIntervalS,
+        (unsigned)sleepman::sleepInS(),
+        (unsigned)p.minRefreshIntervalS,
+        (unsigned)p.idleTimeoutS,
+        (unsigned)p.postRefreshGraceS,
+        (unsigned)p.schedWakeS,
+        (unsigned)p.battLowMv,
         display::lastRefreshEpoch() == 0
             ? 0u
-            : display::lastRefreshEpoch() + sleepman::nextAllowedUpdateInS(),
+            : (unsigned)(display::lastRefreshEpoch() + sleepman::nextAllowedUpdateInS()),
         sleepman::stayAwake() ? "true" : "false",
-        sleepman::bootCount());
+        (unsigned)sleepman::bootCount());
     String j = String(buf);
     j.remove(j.length() - 1);   // drop the trailing }
     j += ",\"auth_open\":";
@@ -205,17 +267,53 @@ static void handleSleep() {
     if (!requireAuth()) return;
 
     String body = s_srv->arg("plain");
-    if (body.indexOf("\"stay_awake\"") >= 0) {
-        bool on = body.indexOf("true") > body.indexOf("\"stay_awake\"");
+    bool stayAwake = false;
+    JsonField stayField = jsonBool(body, "stay_awake", &stayAwake);
+    if (stayField == JsonField::INVALID) {
+        sendJson(400, "{\"error\":\"stay_awake must be true or false\"}");
+        return;
+    }
+
+    sleepman::Params updated = sleepman::params();
+    const char* names[] = {"idle_timeout_s", "post_refresh_grace_s",
+                           "min_refresh_interval_s", "sched_wake_s", "batt_low_mv"};
+    uint32_t* values[] = {&updated.idleTimeoutS, &updated.postRefreshGraceS,
+                          &updated.minRefreshIntervalS, &updated.schedWakeS,
+                          &updated.battLowMv};
+    bool hasParams = false;
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+        JsonField field = jsonUInt(body, names[i], values[i]);
+        if (field == JsonField::INVALID) {
+            sendJson(400, String("{\"error\":\"") + names[i]
+                         + " must be an unsigned 32-bit integer\"}");
+            return;
+        }
+        hasParams = hasParams || field == JsonField::PRESENT;
+    }
+
+    uint32_t delayS = 0;
+    JsonField delayField = jsonUInt(body, "delay_s", &delayS);
+    if (delayField == JsonField::INVALID || delayS > INT32_MAX / 1000UL) {
+        sendJson(400, "{\"error\":\"delay_s must be 0..2147483\"}");
+        return;
+    }
+
+    uint8_t commands = (stayField == JsonField::PRESENT) + hasParams +
+                       (delayField == JsonField::PRESENT);
+    if (commands != 1) {
+        sendJson(400, "{\"error\":\"provide exactly one sleep command\"}");
+        return;
+    }
+    if (stayField == JsonField::PRESENT) {
+        bool on = stayAwake;
         sleepman::setStayAwake(on);
         sendJson(200, String("{\"stay_awake\":") + (on ? "true}" : "false}"));
         return;
     }
-    int idx = body.indexOf("\"delay_s\"");
-    uint32_t delayS = 0;
-    if (idx >= 0) {
-        int colon = body.indexOf(':', idx);
-        if (colon > 0) delayS = (uint32_t)body.substring(colon + 1).toInt();
+    if (hasParams) {
+        sleepman::setParams(updated);
+        sendJson(200, sleepParamsJson(sleepman::params()));
+        return;
     }
     sleepman::requestSleep(delayS);
     sendJson(202, "{\"sleep_in_s\":" + String(delayS) + "}");

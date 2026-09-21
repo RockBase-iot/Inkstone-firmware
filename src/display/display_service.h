@@ -25,6 +25,9 @@ enum class State : uint8_t { IDLE = 0, REFRESHING = 1 };
 // Init driver and frame buffers (PSRAM). Call once, early in setup().
 bool begin();
 
+// True after begin() has initialized the panel driver successfully.
+bool isInitialized();
+
 // Submit a frame and start an asynchronous refresh. The frame is copied into
 // an internal buffer, so the caller's buffer may be reused immediately.
 // len must be == EPD_FRAME_BYTES; returns false while refreshing (caller

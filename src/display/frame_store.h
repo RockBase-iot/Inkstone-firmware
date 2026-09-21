@@ -13,8 +13,8 @@
 // Integrity is verified by CRC32 on load.
 //
 // Logic: after each successful user-requested refresh the frame is persisted.
-// On cold boot, if a valid cached frame exists it is displayed again;
-// otherwise the built-in 4-color test pattern is shown.
+// On cold boot, a valid cache is restored; otherwise the built-in four-color
+// test pattern is displayed.
 // ============================================================================
 
 #include <Arduino.h>

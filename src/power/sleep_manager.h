@@ -55,9 +55,13 @@ void setStayAwake(bool on);
 const Params& params();
 void setParams(const Params& p);   // persisted to NVS
 
-// Enter sleep N seconds from now (called by /api/v1/sleep); 0 = let the
-// normal idle path decide.
+// Enter sleep N seconds from now (called by /api/v1/sleep); 0 = immediately
+// after any refresh already in progress completes.
 void requestSleep(uint32_t delayS);
+
+// Enter deep sleep now. Safe before display::begin(); used for boot paths that
+// must not start Wi-Fi or refresh the panel (low battery, unconfigured timer wake).
+void sleepNow();
 
 // Seconds until the next allowed refresh (0 = allowed now)
 uint32_t nextAllowedUpdateInS();

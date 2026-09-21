@@ -17,8 +17,10 @@ static RTC_DATA_ATTR RtcState s_rtc;
 
 static Params   s_params;
 static uint32_t s_lastActivityMs = 0;
-static uint32_t s_sleepRequestAt = 0;      // millis deadline, 0 = no request
-static bool     s_timerWakeNoPull = false; // timer wake with no pull configured -> back to sleep
+static uint32_t s_sleepRequestAt = 0;
+static bool     s_sleepRequested = false;
+
+static void enterDeepSleep();
 
 static void loadParams() {
     s_params.idleTimeoutS        = IDLE_TIMEOUT_S;
@@ -51,15 +53,16 @@ void begin() {
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
     switch (cause) {
         case ESP_SLEEP_WAKEUP_EXT0:
-            Serial.printf("[sleep] wake by BOOT key (boot #%u)\n", s_rtc.bootCount);
+            Serial.printf("[sleep] wake by BOOT key (boot #%u)\n",
+                          (unsigned)s_rtc.bootCount);
             break;
         case ESP_SLEEP_WAKEUP_TIMER:
             // Phase 3 pull reserved: no pull URL configured -> go back to sleep
             Serial.println("[sleep] wake by timer, no pull source configured");
-            s_timerWakeNoPull = true;
-            break;
+            enterDeepSleep();
+            return;
         default:
-            Serial.printf("[sleep] cold boot (boot #%u)\n", s_rtc.bootCount);
+            Serial.printf("[sleep] cold boot (boot #%u)\n", (unsigned)s_rtc.bootCount);
             break;
     }
 }
@@ -69,7 +72,9 @@ static void enterDeepSleep() {
     Serial.println("[sleep] entering deep sleep...");
 
     // (1) RTC state
-    s_rtc.lastUpdateEpoch = display::lastRefreshEpoch();
+    if (display::isInitialized()) {
+        s_rtc.lastUpdateEpoch = display::lastRefreshEpoch();
+    }
 
     // (2) cut panel drive voltage
     display::powerOff();
@@ -102,13 +107,10 @@ void tick() {
     }
     if (s_rtc.stayAwake) return;
 
-    // Timer wake with no pull configured -> straight back to sleep
-    if (s_timerWakeNoPull) { enterDeepSleep(); return; }
-
     uint32_t now = millis();
 
     // API-requested delayed sleep
-    if (s_sleepRequestAt != 0 && (int32_t)(now - s_sleepRequestAt) >= 0) {
+    if (s_sleepRequested && (int32_t)(now - s_sleepRequestAt) >= 0) {
         enterDeepSleep();
         return;
     }
@@ -153,8 +155,15 @@ void setParams(const Params& p) {
 }
 
 void requestSleep(uint32_t delayS) {
+    // The signed wrap-safe deadline comparison in tick() supports intervals up
+    // to INT32_MAX milliseconds.
+    static const uint32_t MAX_DELAY_S = INT32_MAX / 1000UL;
+    if (delayS > MAX_DELAY_S) delayS = MAX_DELAY_S;
     s_sleepRequestAt = millis() + delayS * 1000UL;
+    s_sleepRequested = true;
 }
+
+void sleepNow() { enterDeepSleep(); }
 
 uint32_t nextAllowedUpdateInS() {
     // Rate limiting counts user-requested refreshes only (boot self-check excluded)
@@ -167,7 +176,7 @@ uint32_t nextAllowedUpdateInS() {
 
 uint32_t sleepInS() {
     if (s_rtc.stayAwake) return 0;
-    if (s_sleepRequestAt != 0) {
+    if (s_sleepRequested) {
         int32_t d = (int32_t)(s_sleepRequestAt - millis());
         return d > 0 ? (uint32_t)(d / 1000) : 0;
     }

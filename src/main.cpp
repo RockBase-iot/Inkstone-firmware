@@ -20,6 +20,14 @@
 #include "power/sleep_manager.h"
 #include "power/battery.h"
 
+static void disableUnusedPeripherals() {
+    const int8_t enPins[] = {PIN_LORA_EN, PIN_CODEC_EN, PIN_TEMP_CTL, PIN_PA_CTRL};
+    for (int8_t pin : enPins) {
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, LOW);
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     delay(100);
@@ -27,6 +35,7 @@ void setup() {
 
     pinMode(PIN_BOOT_BTN, INPUT);
     pinMode(PIN_USER_BTN, INPUT);
+    disableUnusedPeripherals();
 
     // Sleep manager: restore RTC state, dispatch on wake cause
     sleepman::begin();
@@ -34,10 +43,12 @@ void setup() {
     // Low-battery guard (plan section 6.3: too low after wake -> skip service,
     // straight back to sleep)
     uint32_t mv = battery::readMv();
-    Serial.printf("[boot] battery %u mV (%u%%)\n", mv, battery::percent(mv));
+    Serial.printf("[boot] battery %u mV (%u%%)\n", (unsigned)mv,
+                  (unsigned)battery::percent(mv));
     if (mv > 0 && mv < sleepman::params().battLowMv && !sleepman::stayAwake()) {
         Serial.println("[boot] battery low, back to sleep");
-        sleepman::requestSleep(0);
+        sleepman::sleepNow();
+        return;
     }
 
     // Display service
@@ -45,10 +56,9 @@ void setup() {
         Serial.println("[boot] display init failed (PSRAM?)");
     }
 
-    // Cold boot (not a deep-sleep wake): the panel has lost its image.
-    // Show the cached user frame if one exists in NVS, otherwise the
-    // built-in 4-color test pattern. After deep sleep the panel retains
-    // its image, so no refresh is needed on wake.
+    // Cold boot (not a deep-sleep wake): restore the cached user frame when
+    // possible, otherwise run the built-in panel test pattern. Deep-sleep
+    // wakes retain the existing e-paper image and do not refresh it.
     if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED) {
         uint8_t* buf = (uint8_t*)ps_malloc(EPD_FRAME_BYTES);
         if (buf && framestore::load(buf)) {

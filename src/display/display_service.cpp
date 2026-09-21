@@ -28,6 +28,7 @@ static uint32_t   s_lastEpoch      = 0;
 static uint32_t   s_lastMillis     = 0;
 static uint32_t   s_lastUserMillis = 0;    // rate limiting: user-requested refreshes only
 static bool       s_fromUser       = true; // whether the running refresh was user-requested
+static bool       s_initialized    = false;
 static TaskHandle_t s_task     = nullptr;
 
 static void refreshTask(void*) {
@@ -63,6 +64,7 @@ bool begin() {
 
     // Official demo parameters: initial=true, reset=2ms, pulldown=false
     s_display.init(115200, true, 2, false);
+    s_initialized = true;
     return true;
 }
 
@@ -110,13 +112,14 @@ void showSavedFrame(const uint8_t* frame) {
 
 State    state()                 { return s_state; }
 bool     isBusy()                { return s_state == State::REFRESHING; }
+bool     isInitialized()         { return s_initialized; }
 uint32_t lastRefreshEpoch()      { return s_lastEpoch; }
 uint32_t lastRefreshMillis()     { return s_lastMillis; }
 uint32_t lastUserRefreshMillis() { return s_lastUserMillis; }
 const uint8_t* currentFrame()    { return s_frame; }
 
 void powerOff() {
-    if (s_state == State::IDLE) s_display.powerOff();
+    if (s_initialized && s_state == State::IDLE) s_display.powerOff();
 }
 
 } // namespace display
