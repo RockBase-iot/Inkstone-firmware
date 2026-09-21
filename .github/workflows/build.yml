@@ -22,7 +22,7 @@ jobs:
       # T2 golden-baseline self-test: byte-exact packing verification
       - name: Converter self-test
         run: |
-          pip install pillow
+          pip install pillow numpy
           python tools/convert_image.py --selftest
 
       - name: Cache PlatformIO
