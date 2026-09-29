@@ -12,8 +12,8 @@
 //   2. Pre-sleep sequence order is fixed: RTC state -> powerOff -> pull all
 //      peripheral-enable pins low -> WiFi off -> configure wake sources ->
 //      esp_deep_sleep_start()
-//   3. Wake-cause dispatch: ext0 = button -> AWAKE; timer = pull reserved
-//      (back to sleep immediately when unconfigured)
+//   3. Wake-cause dispatch: ext0 = button -> AWAKE; timer = pull when
+//      configured (back to sleep immediately when unconfigured)
 //   4. GPIO0 doubles as the download strap: do not hold BOOT at power-on
 // ============================================================================
 
@@ -25,7 +25,7 @@ struct Params {
     uint32_t idleTimeoutS;        // sleep after this long without HTTP activity
     uint32_t postRefreshGraceS;   // forced awake time after each refresh
     uint32_t minRefreshIntervalS; // min interval between refreshes (429 basis)
-    uint32_t schedWakeS;          // scheduled wake period, 0 = disabled (pull reserved)
+    uint32_t schedWakeS;          // scheduled pull wake period, 0 = disabled
     uint32_t battLowMv;           // low-battery threshold
 };
 

@@ -93,6 +93,28 @@ static void startMdns() {
     }
 }
 
+bool connectStaOnly() {
+    prefs().begin("wifi", true);
+    String ssid = prefs().getString("ssid", "");
+    String pass = prefs().getString("pass", "");
+    prefs().end();
+    if (ssid.isEmpty()) return false;
+
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid.c_str(), pass.c_str());
+    uint32_t started = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - started < STA_TIMEOUT_MS) {
+        delay(250);
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+        WiFi.disconnect(true);
+        return false;
+    }
+    s_mode = Mode::STA;
+    s_ssid = ssid;
+    return true;
+}
+
 Mode begin() {
     // Read the STA MAC straight from eFuse (device identity; always valid
     // even before Wi-Fi starts — WiFi.macAddress() can return 00:00:00:00:00:00
@@ -112,30 +134,13 @@ Mode begin() {
     Serial.printf("[wifi] MAC=%s  AP=%s  mDNS=%s.local\n",
                   s_mac.c_str(), s_apSsid.c_str(), s_mdnsHost.c_str());
 
-    prefs().begin("wifi", true);
-    String ssid = prefs().getString("ssid", "");
-    String pass = prefs().getString("pass", "");
-    prefs().end();
-
-    if (ssid.length() > 0) {
-        Serial.printf("[wifi] connecting to %s ...\n", ssid.c_str());
-        WiFi.mode(WIFI_STA);
-        WiFi.begin(ssid.c_str(), pass.c_str());
-        uint32_t t0 = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - t0 < STA_TIMEOUT_MS) {
-            delay(250);
-        }
-        if (WiFi.status() == WL_CONNECTED) {
-            s_mode = Mode::STA;
-            s_ssid = ssid;
-            Serial.printf("[wifi] STA connected, IP=%s\n",
-                          WiFi.localIP().toString().c_str());
-            startMdns();
-            return s_mode;
-        }
-        Serial.println("[wifi] STA timeout, falling back to AP");
-        WiFi.disconnect(true);
+    if (connectStaOnly()) {
+        Serial.printf("[wifi] STA connected, IP=%s\n",
+                      WiFi.localIP().toString().c_str());
+        startMdns();
+        return s_mode;
     }
+    Serial.println("[wifi] STA unavailable, falling back to AP");
 
     // AP mode
     WiFi.mode(WIFI_AP);

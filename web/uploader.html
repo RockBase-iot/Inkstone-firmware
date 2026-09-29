@@ -49,7 +49,22 @@
   .pv-pick { width:100%; margin-top:8px; padding:9px 10px; font-size:13px; }
   .pv-pick.ghost { background:#fff; }
   .pv-pane.busy canvas { opacity:.45; }
+  .adjust-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-top:12px; }
+  .adjust-control { display:block; min-width:0; font-size:12px; }
+  .adjust-control span { display:flex; justify-content:space-between; gap:8px; }
+  .adjust-control output { font-variant-numeric:tabular-nums; }
+  .adjust-control input { width:100%; margin-top:10px; accent-color:var(--accent); }
+  .adjust-actions { margin-top:4px; }
+  .adjust-actions button { padding:7px 12px; font-size:12px; }
+  .tone-editor { display:grid; grid-template-columns:192px minmax(0,1fr); gap:18px;
+                 align-items:center; margin-top:14px; border-top:1px solid var(--line); padding-top:12px; }
+  .tone-graph { width:192px; aspect-ratio:1; border-radius:4px; margin:0; cursor:ns-resize; }
+  .tone-controls { display:grid; gap:8px; min-width:0; }
+  .tone-controls .adjust-control input { margin-top:4px; }
   @media (max-width:640px) { .pv-grid { grid-template-columns:1fr; } }
+  @media (max-width:640px) { .adjust-grid { grid-template-columns:1fr; gap:8px; } }
+  @media (max-width:480px) { .tone-editor { grid-template-columns:1fr; justify-items:center; }
+                              .tone-controls { width:100%; } }
 </style>
 </head>
 <body>
@@ -62,6 +77,7 @@
      scripts/gen_embedded_page.py inlines this into the served HTML at build
      time; when developing, open this file directly and it loads as a sibling. -->
 <script src="retro_core.js"></script>
+<script src="color_adjust.js"></script>
 
 <!-- 1. Pick image -->
 <div class="card">
@@ -78,6 +94,28 @@
 <!-- 3. Preview: DEFAULT vs RETRO, side by side -->
 <div class="card hidden" id="prevCard">
   <h2 data-i18n="s3">3 · Compare two algorithms, then pick one</h2>
+  <div class="adjust-grid">
+    <label class="adjust-control"><span><span data-i18n="exposure">Exposure</span><output id="exposureValue">+0.0 EV</output></span>
+      <input type="range" id="exposure" min="-1" max="1" step="0.1" value="0"></label>
+    <label class="adjust-control"><span><span data-i18n="saturation">Saturation</span><output id="saturationValue">100%</output></span>
+      <input type="range" id="saturation" min="0" max="1.6" step="0.05" value="1"></label>
+    <label class="adjust-control"><span><span data-i18n="contrast">Contrast</span><output id="contrastValue">100%</output></span>
+      <input type="range" id="contrast" min="0.7" max="1.3" step="0.05" value="1"></label>
+  </div>
+  <div class="tone-editor">
+    <canvas id="toneCv" class="tone-graph" width="256" height="256" role="img" data-i18n-aria-label="toneCurve" aria-label="Tone Curve"></canvas>
+    <div class="tone-controls">
+      <div class="row"><strong data-i18n="toneCurve">Tone Curve</strong>
+        <button type="button" class="ghost" id="resetTone" data-i18n="resetTone">Reset curve</button></div>
+      <label class="adjust-control"><span><span data-i18n="shadows">Shadows</span><output id="tone1Value">0%</output></span>
+        <input type="range" id="tone1" min="0" max="128" step="1" value="64"></label>
+      <label class="adjust-control"><span><span data-i18n="midtones">Midtones</span><output id="tone2Value">0%</output></span>
+        <input type="range" id="tone2" min="64" max="192" step="1" value="128"></label>
+      <label class="adjust-control"><span><span data-i18n="highlights">Highlights</span><output id="tone3Value">0%</output></span>
+        <input type="range" id="tone3" min="128" max="255" step="1" value="192"></label>
+    </div>
+  </div>
+  <div class="adjust-actions"><button type="button" class="ghost" id="resetAdjust" data-i18n="resetAdjust">Reset color</button></div>
   <div class="row">
     <button class="ghost" id="reDither" data-i18n="redither">Re-quantize</button>
     <span class="pv-note" id="pvNote"></span>
@@ -153,6 +191,8 @@ const I18N = {
     drop:"Click or drag an image here",
     s2:"2 · Crop (fixed 4:3 · drag to move · wheel / pinch to zoom)",
     s3:"3 · Compare two algorithms, then pick one", redither:"Re-quantize",
+    exposure:"Exposure", saturation:"Saturation", contrast:"Contrast", resetAdjust:"Reset color",
+    toneCurve:"Tone Curve", shadows:"Shadows", midtones:"Midtones", highlights:"Highlights", resetTone:"Reset curve",
     s4:"4 · Push to device", send:"Show on display (~30 s)",
     algoDefault:"DEFAULT · faithful", algoDefaultNote:"Floyd–Steinberg",
     algoRetro:"RETRO · vintage", algoRetroNote:"OKLab + hue mask",
@@ -186,6 +226,8 @@ const I18N = {
     drop:"点击选择或拖拽图片到这里",
     s2:"2 · 裁剪（4:3 固定比例，拖动移动 · 滚轮/双指缩放）",
     s3:"3 · 并排对比两种算法，选一个推送", redither:"重新量化",
+    exposure:"曝光", saturation:"饱和度", contrast:"对比度", resetAdjust:"重置调色",
+    toneCurve:"影调曲线", shadows:"暗部", midtones:"中间调", highlights:"高光", resetTone:"重置曲线",
     s4:"4 · 上传到设备", send:"刷屏显示（约 30 秒）",
     algoDefault:"DEFAULT · 保真", algoDefaultNote:"Floyd–Steinberg",
     algoRetro:"RETRO · 复古", algoRetroNote:"OKLab + 色相掩码",
@@ -223,6 +265,7 @@ function applyLang() {
   document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
   document.querySelectorAll("[data-i18n]").forEach(el => el.textContent = t(el.dataset.i18n));
   document.querySelectorAll("[data-i18n-ph]").forEach(el => el.placeholder = t(el.dataset.i18nPh));
+  document.querySelectorAll("[data-i18n-aria-label]").forEach(el => el.setAttribute("aria-label", t(el.dataset.i18nAriaLabel)));
   $("langBtn").textContent = lang === "zh" ? "English" : "中文";
 }
 $("langBtn").onclick = () => {
@@ -253,6 +296,115 @@ let srcBitmap = null;
 /* One pre-quantized frame per profile, and which one the user picked. */
 let frames = { default: null, retro: null };
 let chosen = "default";
+const adjustments = { exposure: 0, saturation: 1, contrast: 1 };
+const tonePoints = [0, 64, 128, 192, 255];
+let adjustmentTimer = null;
+let uploadInProgress = false;
+
+function drawToneCurve() {
+  const canvas = $("toneCv"), context = canvas.getContext("2d");
+  const start = 16, span = 224;
+  context.clearRect(0, 0, 256, 256);
+  context.fillStyle = "#fbfaf6";
+  context.fillRect(start, start, span, span);
+  context.strokeStyle = "#d8d4c8";
+  context.lineWidth = 1;
+  for (let division = 0; division <= 4; division++) {
+    const position = start + span * division / 4;
+    context.beginPath(); context.moveTo(position, start); context.lineTo(position, start + span);
+    context.moveTo(start, position); context.lineTo(start + span, position); context.stroke();
+  }
+  context.strokeStyle = "#a8a49d";
+  context.beginPath(); context.moveTo(start, start + span); context.lineTo(start + span, start); context.stroke();
+  const lookup = makeToneCurve(tonePoints);
+  context.strokeStyle = "#b83a32";
+  context.lineWidth = 2;
+  context.beginPath();
+  for (let index = 0; index < 256; index++) {
+    const x = start + span * index / 255;
+    const y = start + span * (1 - (lookup ? lookup[index] : index) / 255);
+    if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
+  }
+  context.stroke();
+  context.fillStyle = "#b83a32";
+  for (let index = 1; index <= 3; index++) {
+    context.beginPath();
+    context.arc(start + span * index / 4, start + span * (1 - tonePoints[index] / 255), 5, 0, 2 * Math.PI);
+    context.fill();
+  }
+}
+
+function updateTonePoints(index, value) {
+  tonePoints[index] = Math.max(tonePoints[index - 1], Math.min(tonePoints[index + 1], value));
+  for (let point = 1; point <= 3; point++) {
+    const input = $("tone" + point);
+    input.min = tonePoints[point - 1];
+    input.max = tonePoints[point + 1];
+    input.value = tonePoints[point];
+    const offset = Math.round((tonePoints[point] - [0, 64, 128, 192, 255][point]) * 100 / 255);
+    $("tone" + point + "Value").textContent = (offset > 0 ? "+" : "") + offset + "%";
+  }
+  drawToneCurve();
+  scheduleQuantize();
+}
+
+for (let index = 1; index <= 3; index++) {
+  $("tone" + index).addEventListener("input", event => updateTonePoints(index, Number(event.target.value)));
+}
+let draggedTonePoint = 0;
+const toneCanvas = $("toneCv");
+toneCanvas.addEventListener("pointerdown", event => {
+  const bounds = toneCanvas.getBoundingClientRect();
+  const position = (event.clientX - bounds.left) * 256 / bounds.width;
+  draggedTonePoint = Math.max(1, Math.min(3, Math.round((position - 16) * 4 / 224)));
+  toneCanvas.setPointerCapture(event.pointerId);
+  const height = (event.clientY - bounds.top) * 256 / bounds.height;
+  updateTonePoints(draggedTonePoint, Math.round((1 - (height - 16) / 224) * 255));
+});
+toneCanvas.addEventListener("pointermove", event => {
+  if (!draggedTonePoint) return;
+  const bounds = toneCanvas.getBoundingClientRect();
+  const height = (event.clientY - bounds.top) * 256 / bounds.height;
+  updateTonePoints(draggedTonePoint, Math.round((1 - (height - 16) / 224) * 255));
+});
+toneCanvas.addEventListener("pointerup", () => { draggedTonePoint = 0; });
+toneCanvas.addEventListener("pointercancel", () => { draggedTonePoint = 0; });
+$("resetTone").onclick = () => {
+  tonePoints[1] = 64; tonePoints[2] = 128; tonePoints[3] = 192;
+  updateTonePoints(2, 128);
+};
+drawToneCurve();
+
+function updateAdjustmentValues() {
+  $("exposureValue").textContent = (adjustments.exposure >= 0 ? "+" : "") + adjustments.exposure.toFixed(1) + " EV";
+  $("saturationValue").textContent = Math.round(adjustments.saturation * 100) + "%";
+  $("contrastValue").textContent = Math.round(adjustments.contrast * 100) + "%";
+}
+
+function scheduleQuantize() {
+  if (!srcBitmap) return;
+  clearTimeout(adjustmentTimer);
+  frames.default = frames.retro = null;
+  $("sendBtn").disabled = true;
+  $("paneDefault").classList.add("busy");
+  $("paneRetro").classList.add("busy");
+  adjustmentTimer = setTimeout(quantize, 250);
+}
+
+for (const key of Object.keys(adjustments)) {
+  $(key).addEventListener("input", event => {
+    adjustments[key] = Number(event.target.value);
+    updateAdjustmentValues();
+    scheduleQuantize();
+  });
+}
+$("resetAdjust").onclick = () => {
+  adjustments.exposure = 0;
+  adjustments.saturation = adjustments.contrast = 1;
+  for (const key of Object.keys(adjustments)) $(key).value = adjustments[key];
+  updateAdjustmentValues();
+  $("resetTone").click();
+};
 
 /* ---------- Pick image ---------- */
 const drop = $("drop"), file = $("file");
@@ -265,6 +417,10 @@ file.onchange = () => file.files[0] && loadImage(file.files[0]);
 
 async function loadImage(f) {
   try {
+    clearTimeout(adjustmentTimer);
+    srcBitmap = null;
+    frames.default = frames.retro = null;
+    $("sendBtn").disabled = true;
     srcBitmap = await createImageBitmap(f);
     initCrop();
     $("cropCard").classList.remove("hidden");
@@ -373,27 +529,28 @@ function paintRetro(cvId, frame) {
 /* ---------- Quantize both profiles + preview ---------- */
 function quantize() {
   if (!srcBitmap) return;
+  clearTimeout(adjustmentTimer);
   const t0 = performance.now();
   const src = renderCropped();
-  const rgb = new Uint8ClampedArray(W * H * 3);
-  for (let i = 0; i < W * H; i++) {
-    const rgba = i * 4, rgbOffset = i * 3;
-    rgb[rgbOffset] = src.data[rgba];
-    rgb[rgbOffset + 1] = src.data[rgba + 1];
-    rgb[rgbOffset + 2] = src.data[rgba + 2];
-  }
+  const toneCurve = makeToneCurve(tonePoints);
+  const adjusted = adjustColorPixels(src.data, adjustments.exposure,
+                                     adjustments.saturation, adjustments.contrast, toneCurve);
 
   /* DEFAULT: the original all-integer path, unchanged. Its frame is what the
      page has always pushed and is byte-identical to the firmware's. */
   msg(t("quantizingDefault"), "info");
-  frames.default = quantizeDefault(src.data);
+  frames.default = quantizeDefault(adjusted.rgba);
   paint("prevDefault", frames.default, PAL_VIEW);
 
   /* RETRO: one shared implementation with the parity checker. It is far
      heavier (OKLab per pixel), so announce it before blocking the thread. */
   msg(t("quantizingRetro"), "info");
-  frames.retro = retroQuantize(rgb, true);
+  frames.retro = retroQuantize(adjusted.rgb, true, adjustments.contrast === 1 && !toneCurve);
   paintRetro("prevRetro", frames.retro);
+
+  $("paneDefault").classList.remove("busy");
+  $("paneRetro").classList.remove("busy");
+  $("sendBtn").disabled = uploadInProgress;
 
   const ms = Math.round(performance.now() - t0);
   msg(t("quantized") + " · " + ms + " ms", "ok");
@@ -470,6 +627,7 @@ $("sendBtn").onclick = () => {
   const frame = frames[chosen];
   if (!frame) { msg(t("chosenNone"), "err"); return; }
   $("sendBtn").disabled = true;
+  uploadInProgress = true;
   msg(t("uploading"), "info");
   const xhr = new XMLHttpRequest();
   /* Push the frame we already quantized. The device accepts
@@ -489,10 +647,11 @@ $("sendBtn").onclick = () => {
       try { const j = JSON.parse(xhr.responseText);
             s += "：" + j.error + (j.retry_after_s ? "（" + j.retry_after_s + t("retryIn") + "）" : "");
       } catch (e) {}
-      msg(s, "err"); $("sendBtn").disabled = false; $("bar").style.width = "0";
+      msg(s, "err"); uploadInProgress = false;
+      $("sendBtn").disabled = !frames[chosen]; $("bar").style.width = "0";
     }
   };
-  xhr.onerror = () => { msg(t("netErr"), "err"); $("sendBtn").disabled = false; };
+  xhr.onerror = () => { msg(t("netErr"), "err"); uploadInProgress = false; $("sendBtn").disabled = !frames[chosen]; };
   xhr.send(frame);
 };
 function pollBusy() {
@@ -500,7 +659,8 @@ function pollBusy() {
     if (s.busy) { setTimeout(pollBusy, 2000); return; }
     $("bar").style.width = "100%";
     msg(t("done"), "ok");
-    $("sendBtn").disabled = false;
+    uploadInProgress = false;
+    $("sendBtn").disabled = !frames[chosen];
   }).catch(() => setTimeout(pollBusy, 3000));
 }
 

@@ -17,6 +17,7 @@
 #include "display/frame_store.h"
 #include "net/wifi_portal.h"
 #include "net/web_server.h"
+#include "net/pull_client.h"
 #include "power/sleep_manager.h"
 #include "power/battery.h"
 
@@ -47,6 +48,38 @@ void setup() {
                   (unsigned)battery::percent(mv));
     if (mv > 0 && mv < sleepman::params().battLowMv && !sleepman::stayAwake()) {
         Serial.println("[boot] battery low, back to sleep");
+        sleepman::sleepNow();
+        return;
+    }
+
+    if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER) {
+        if (!pull::configured() || sleepman::params().schedWakeS == 0) {
+            sleepman::sleepNow();
+            return;
+        }
+        if (!wifiportal::connectStaOnly()) {
+            Serial.println("[pull] STA unavailable; keeping current image");
+            sleepman::sleepNow();
+            return;
+        }
+        uint8_t* frame = (uint8_t*)ps_malloc(EPD_FRAME_BYTES);
+        uint8_t* cached = (uint8_t*)ps_malloc(EPD_FRAME_BYTES);
+        if (frame && cached && pull::fetchFrame(frame)) {
+            bool same = framestore::load(cached) &&
+                        memcmp(frame, cached, EPD_FRAME_BYTES) == 0;
+            if (same) {
+                Serial.println("[pull] image unchanged; skipping refresh");
+            } else if (display::begin() && display::submitFrame(frame, EPD_FRAME_BYTES)) {
+                while (display::isBusy()) delay(50);
+                Serial.println("[pull] refresh complete");
+            } else {
+                Serial.println("[pull] display unavailable; keeping current image");
+            }
+        } else {
+            Serial.println("[pull] fetch failed; keeping current image");
+        }
+        free(frame);
+        free(cached);
         sleepman::sleepNow();
         return;
     }

@@ -12,7 +12,7 @@ power-on / wake → AWAKE (HTTP service)
   ├─ idle beyond IDLE_TIMEOUT_S (default 300 s) → PRE_SLEEP → DEEP_SLEEP
   └─ never sleeps automatically when stay_awake=true
 DEEP_SLEEP → BOOT key (ext0) wakes back to AWAKE;
-             timer wake is reserved for pull mode
+             timer wake → battery check → STA GET/convert → refresh if changed → sleep
 ```
 
 ## Default parameters (overridable via `POST /api/v1/sleep` and persisted in NVS)
@@ -31,8 +31,8 @@ DEEP_SLEEP → BOOT key (ext0) wakes back to AWAKE;
 2. Fixed pre-sleep sequence: RTC state → `powerOff()` → pull peripheral-enable
    pins low (47/44/40/41/43) → Wi-Fi off → configure wake sources →
    `esp_deep_sleep_start()`.
-3. Wake dispatch: button → AWAKE; timer → back to sleep immediately when no
-   pull source is configured; cold boot → normal provisioning flow.
+3. Wake dispatch: button → AWAKE; timer → pull only if a URL and interval are
+  configured, otherwise back to sleep; cold boot → normal provisioning flow.
 4. GPIO0 doubles as the download strap: **a short BOOT press wakes the device
    from deep sleep — do not hold BOOT at power-on**.
 5. Low-battery guard: below 3400 mV after wake (and not stay-awake) →
@@ -44,7 +44,15 @@ Each successful user-requested refresh is cached to the dedicated 2MB raw
 flash partition `frame` (with a magic + length + CRC32 header). On cold boot,
 the cached frame is displayed again; if no cache exists (or the CRC check
 fails), the built-in 4-color test pattern is shown. After deep sleep the panel
-retains its image, so no refresh happens on wake.
+retains its image, so no refresh happens on button wake.
+
+Scheduled pull reads a new frame from the configured URL after passing the
+low-battery guard. It connects via STA only, with no AP fallback or web server;
+it keeps the existing panel image if the network or image fails, or if the
+resulting frame equals the persisted frame. It waits for an actual refresh and
+frame persistence before sleeping. Configure the URL and timer using
+`GET/POST /api/v1/pull` (see API.md). The timer period is at least the
+configured minimum refresh interval, measured from entry into deep sleep.
 
 ## Usage notes
 
@@ -69,7 +77,8 @@ retains its image, so no refresh happens on wake.
   ├─ 收到 /display → REFRESHING（25–30 s，独立任务）→ 完成后 grace 窗口
   ├─ 空闲超过 IDLE_TIMEOUT_S（默认 300 s）→ PRE_SLEEP → DEEP_SLEEP
   └─ stay_awake=true 时永不自动休眠
-DEEP_SLEEP → BOOT 键（ext0）唤醒回 AWAKE；定时唤醒为 pull 模式预留
+DEEP_SLEEP → BOOT 键（ext0）唤醒回 AWAKE；
+             定时唤醒 → 低电检测 → STA 拉图/量化 → 图变才刷 → 回睡
 ```
 
 ## 默认参数（可通过 `POST /api/v1/sleep` 覆盖并持久化到 NVS）
@@ -87,7 +96,7 @@ DEEP_SLEEP → BOOT 键（ext0）唤醒回 AWAKE；定时唤醒为 pull 模式�
 1. 刷新中绝不睡眠。
 2. 睡前序列顺序固定：RTC 状态 → `powerOff()` → 拉低外设使能脚
    （47/44/40/41/43）→ Wi-Fi 断开 → 配置唤醒源 → `esp_deep_sleep_start()`。
-3. 唤醒分流：按键 → AWAKE；定时 → 无 pull 配置则立即回睡；冷启动 → 正常配网流程。
+3. 唤醒分流：按键 → AWAKE；定时 → 有 URL 和周期才拉图，否则立即回睡；冷启动 → 正常配网流程。
 4. GPIO0 复用下载模式：**深睡时短按 BOOT 唤醒即可，不要在上电瞬间长按**。
 5. 低电保护：唤醒后电量 < 3400 mV 且非常醒 → 立即回睡。
 6. 若需要重新刷写代码，可按住BOOT键，然后RESET键进入下载模式。
@@ -97,7 +106,12 @@ DEEP_SLEEP → BOOT 键（ext0）唤醒回 AWAKE；定时唤醒为 pull 模式�
 每次用户成功刷屏的帧会缓存进独立的 2MB raw flash 分区 `frame`
 （带 magic + 长度 + CRC32 校验头）。冷启动时若缓存有效则显示用户内容，
 无缓存（或 CRC 校验失败）则显示内置四色条纹。
-深睡唤醒后面板图像仍在，不触发刷新。
+按键唤醒后面板图像仍在，不触发刷新。
+
+定时拉图先经过低电保护，仅连接已保存的 STA，不启动 AP 或网页服务。
+断网、图片无效或新帧与持久帧相同时保留屏上画面；有新帧时等待刷新和
+持久化结束后回睡。URL 与周期通过 `GET/POST /api/v1/pull` 配置（见 API.md）；
+实际定时周期至少为最短刷新间隔，自进入深睡后开始计时。
 
 ## 使用建议
 

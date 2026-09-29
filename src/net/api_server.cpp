@@ -2,6 +2,7 @@
 
 #include "net/api_server.h"
 #include "net/wifi_portal.h"
+#include "net/pull_client.h"
 #include "boards/board.h"
 #include "display/display_service.h"
 #include "display/image_pipeline.h"
@@ -9,6 +10,7 @@
 #include "power/battery.h"
 
 #include <Preferences.h>
+#include <ArduinoJson.h>
 #include <ctype.h>
 #include <limits.h>
 
@@ -347,6 +349,60 @@ static void handleAuthMode() {
     sendJson(200, String("{\"auth_open\":") + (open ? "true}" : "false}"));
 }
 
+static void handlePullConfig() {
+    sleepman::notifyActivity();
+    if (!requireAuth()) return;
+
+    if (s_srv->method() == HTTP_GET) {
+        JsonDocument result;
+        result["url"] = pull::url();
+        result["interval_s"] = sleepman::params().schedWakeS;
+        imagepipe::Profile p = pull::profile();
+        result["profile"] = p == imagepipe::Profile::IPP_RETRO ? "retro"
+                            : p == imagepipe::Profile::IPP_NONE ? "none" : "default";
+        String json;
+        serializeJson(result, json);
+        sendJson(200, json);
+        return;
+    }
+
+    String body = s_srv->arg("plain");
+    JsonDocument input;
+    if (body.length() > 1024 || deserializeJson(input, body) ||
+        !input.is<JsonObject>() || !input["url"].is<const char*>()) {
+        sendJson(400, "{\"error\":\"expected JSON object with url string\"}");
+        return;
+    }
+    String source = input["url"].as<String>();
+    imagepipe::Profile selected = pull::profile();
+    if (!input["profile"].isNull() &&
+        (!input["profile"].is<const char*>() ||
+         !imagepipe::parseProfile(input["profile"].as<const char*>(), &selected))) {
+        sendJson(400, "{\"error\":\"profile must be default|retro|none\"}");
+        return;
+    }
+
+    sleepman::Params updated = sleepman::params();
+    if (!source.isEmpty() && updated.schedWakeS == 0) updated.schedWakeS = 3600;
+    if (!input["interval_s"].isNull()) {
+        if (!input["interval_s"].is<uint32_t>()) {
+            sendJson(400, "{\"error\":\"interval_s must be a positive integer\"}");
+            return;
+        }
+        updated.schedWakeS = input["interval_s"].as<uint32_t>();
+    }
+    if (source.isEmpty()) updated.schedWakeS = 0;
+    if ((!source.isEmpty() &&
+         (updated.schedWakeS < updated.minRefreshIntervalS ||
+          updated.schedWakeS > 604800)) ||
+        !pull::save(source, selected)) {
+        sendJson(400, "{\"error\":\"invalid URL or interval (HTTP only, 256 chars max)\"}");
+        return;
+    }
+    sleepman::setParams(updated);
+    sendJson(200, "{\"saved\":true}");
+}
+
 void registerRoutes(WebServer& server) {
     s_srv = &server;
     loadAuthMode();
@@ -358,6 +414,8 @@ void registerRoutes(WebServer& server) {
     server.on("/api/v1/sleep",   HTTP_POST, handleSleep);
     server.on("/api/v1/token",   HTTP_POST, handleTokenRotate);
     server.on("/api/v1/auth",    HTTP_POST, handleAuthMode);
+    server.on("/api/v1/pull",    HTTP_GET,  handlePullConfig);
+    server.on("/api/v1/pull",    HTTP_POST, handlePullConfig);
 }
 
 } // namespace api

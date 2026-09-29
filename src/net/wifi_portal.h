@@ -24,6 +24,9 @@ enum class Mode : uint8_t { STA = 0, AP = 1 };
 // Returns the final mode.
 Mode begin();
 
+// Timer wake: connect to saved STA only; never start the captive portal.
+bool connectStaOnly();
+
 // Call in loop(): AP-mode DNS replies, BOOT long-press rescue detection.
 void tick();
 

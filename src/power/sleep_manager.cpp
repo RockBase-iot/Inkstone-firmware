@@ -3,6 +3,7 @@
 #include "power/sleep_manager.h"
 #include "boards/board.h"
 #include "display/display_service.h"
+#include "net/pull_client.h"
 
 #include <WiFi.h>
 #include <esp_wifi.h>
@@ -57,10 +58,9 @@ void begin() {
                           (unsigned)s_rtc.bootCount);
             break;
         case ESP_SLEEP_WAKEUP_TIMER:
-            // Phase 3 pull reserved: no pull URL configured -> go back to sleep
-            Serial.println("[sleep] wake by timer, no pull source configured");
-            enterDeepSleep();
-            return;
+            Serial.printf("[sleep] wake by timer (boot #%u)\n",
+                          (unsigned)s_rtc.bootCount);
+            break;
         default:
             Serial.printf("[sleep] cold boot (boot #%u)\n", (unsigned)s_rtc.bootCount);
             break;
@@ -90,8 +90,9 @@ static void enterDeepSleep() {
 
     // (5) wake sources: BOOT key (pressed = LOW) + optional timer
     esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BOOT_BTN, 0);
-    if (s_params.schedWakeS > 0) {
-        esp_sleep_enable_timer_wakeup((uint64_t)s_params.schedWakeS * 1000000ULL);
+    if (s_params.schedWakeS > 0 && pull::configured()) {
+        uint32_t period = max(s_params.schedWakeS, s_params.minRefreshIntervalS);
+        esp_sleep_enable_timer_wakeup((uint64_t)period * 1000000ULL);
     }
 
     // (6) deep sleep

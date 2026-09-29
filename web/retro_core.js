@@ -308,7 +308,7 @@ const toByte = v01 => {
 };
 
 /* ── Stage 4: stylised preprocessing. rgb: Uint8ClampedArray (W*H*3) ── */
-function retroPreprocess(rgb, n) {
+function retroPreprocess(rgb, n, applyToneCurve = true) {
   for (let i = 0; i < n; i++) {
     const r = srgbByteToLinear(rgb[i * 3]);
     const g = srgbByteToLinear(rgb[i * 3 + 1]);
@@ -330,7 +330,9 @@ function retroPreprocess(rgb, n) {
     else if (hue > R_GREEN_LO && hue < R_GREEN_HI) { A = fr(A * R_GREEN_SCALE); B = fr(B * R_GREEN_SCALE); }
 
     L = fr(Math.min(1, Math.max(0, L)));
-    L = fr(Math.min(1, Math.max(0, fr(L + fr(R_S_CURVE_AMP * uSin(fr(fr(2 * R_PI) * L)))))));
+    if (applyToneCurve) {
+      L = fr(Math.min(1, Math.max(0, fr(L + fr(R_S_CURVE_AMP * uSin(fr(fr(2 * R_PI) * L)))))));
+    }
 
     oklabToRgbInto(L, A, B);
     rgb[i * 3] = toByte(oR);
@@ -368,11 +370,11 @@ function nearestMasked(L, A, B, pal, mask) {
 /* ── Stages 6+7: serpentine Atkinson diffusion + 2bpp packing ──
    rgbIn: Uint8ClampedArray of W*H*3 bytes (already 400x300).
    Returns Uint8Array of 30000. */
-function retroQuantize(rgbIn, dither = true) {
+function retroQuantize(rgbIn, dither = true, applyToneCurve = true) {
   const W = RETRO_W, H = RETRO_H;
   const n = W * H;
   const work = new Uint8ClampedArray(rgbIn);   /* copy: preprocess is in place */
-  retroPreprocess(work, n);
+  retroPreprocess(work, n, applyToneCurve);
 
   const mask = new Uint8Array(n);
   for (let i = 0; i < n; i++) mask[i] = hueMask(work[i * 3], work[i * 3 + 1], work[i * 3 + 2]);
