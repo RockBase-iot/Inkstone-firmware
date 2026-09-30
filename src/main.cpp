@@ -24,6 +24,7 @@
 static void disableUnusedPeripherals() {
     const int8_t enPins[] = {PIN_LORA_EN, PIN_CODEC_EN, PIN_TEMP_CTL, PIN_PA_CTRL};
     for (int8_t pin : enPins) {
+        if (pin < 0) continue;   // board has no such rail
         pinMode(pin, OUTPUT);
         digitalWrite(pin, LOW);
     }
@@ -34,8 +35,14 @@ void setup() {
     delay(100);
     Serial.printf("\n=== Inkstone %s @ %s ===\n", "1.0.0", BOARD_NAME);
 
-    pinMode(PIN_BOOT_BTN, INPUT);
-    pinMode(PIN_USER_BTN, INPUT);
+    if (PIN_BOOT_BTN >= 0) {
+        // INPUT_PULLUP: the BOOT key is a strapping pin; without a pull-up a
+        // floating level reads LOW and falsely triggers the 5s rescue hold.
+        pinMode(PIN_BOOT_BTN, INPUT_PULLUP);
+        Serial.printf("[boot] BOOT key (GPIO%d) level=%d (1=released)\n",
+                      PIN_BOOT_BTN, digitalRead(PIN_BOOT_BTN));
+    }
+    if (PIN_USER_BTN >= 0) pinMode(PIN_USER_BTN, INPUT);
     disableUnusedPeripherals();
 
     // Sleep manager: restore RTC state, dispatch on wake cause

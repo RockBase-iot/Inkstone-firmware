@@ -21,6 +21,8 @@
   button.ghost { background:#fff; color:var(--ink); border:1px solid var(--line); }
   input[type=text],input[type=password] { flex:1; min-width:160px; padding:9px 10px;
            border:1px solid var(--line); border-radius:8px; font-size:14px; }
+  select { padding:9px 10px; border:1px solid var(--line); border-radius:8px;
+           font-size:14px; background:#fff; color:var(--ink); }
   #drop { border:2px dashed var(--line); border-radius:10px; padding:34px 10px;
           text-align:center; color:#888; cursor:pointer; }
   #drop.over { border-color:var(--accent); color:var(--accent); }
@@ -56,6 +58,8 @@
   .adjust-control input { width:100%; margin-top:10px; accent-color:var(--accent); }
   .adjust-actions { margin-top:4px; }
   .adjust-actions button { padding:7px 12px; font-size:12px; }
+  .rotbtn { padding:6px 14px; font-size:13px; }
+  .rotbtn.ghost { background:#fff; }
   .tone-editor { display:grid; grid-template-columns:192px minmax(0,1fr); gap:18px;
                  align-items:center; margin-top:14px; border-top:1px solid var(--line); padding-top:12px; }
   .tone-graph { width:192px; aspect-ratio:1; border-radius:4px; margin:0; cursor:ns-resize; }
@@ -78,6 +82,19 @@
      time; when developing, open this file directly and it loads as a sibling. -->
 <script src="retro_core.js"></script>
 <script src="color_adjust.js"></script>
+<script src="e6_core.js"></script>
+
+<!-- 0. Device model -->
+<div class="card">
+  <h2 data-i18n="model">0 · Device model</h2>
+  <div class="row">
+    <select id="modelSel">
+      <option value="nm4c">NM-EPD-420-4C · 400×300 · 4 colors</option>
+      <option value="e6">Spectra-e6 · 1200×1600 · 6 colors</option>
+    </select>
+    <span class="pv-note" id="modelNote"></span>
+  </div>
+</div>
 
 <!-- 1. Pick image -->
 <div class="card">
@@ -87,8 +104,15 @@
 
 <!-- 2. Crop -->
 <div class="card hidden" id="cropCard">
-  <h2 data-i18n="s2">2 · Crop (fixed 4:3 · drag to move · wheel / pinch to zoom)</h2>
+  <h2 id="s2h">2 · Crop (drag to move · wheel / pinch to zoom)</h2>
   <canvas id="cropCv" width="640" height="360"></canvas>
+  <div class="row">
+    <span class="pv-note" data-i18n="rotate">Rotate:</span>
+    <button type="button" class="rotbtn" data-rot="0">0°</button>
+    <button type="button" class="rotbtn ghost" data-rot="90">90°</button>
+    <button type="button" class="rotbtn ghost" data-rot="180">180°</button>
+    <button type="button" class="rotbtn ghost" data-rot="270">270°</button>
+  </div>
 </div>
 
 <!-- 3. Preview: DEFAULT vs RETRO, side by side -->
@@ -123,8 +147,10 @@
   <div class="pv-grid">
     <div class="pv-pane" id="paneDefault">
       <div class="pv-head">
-        <span class="pv-title" data-i18n="algoDefault">DEFAULT · faithful</span>
-        <span class="pv-note" data-i18n="algoDefaultNote">Floyd–Steinberg</span>
+        <span class="pv-title" id="titleDefault" data-i18n="algoDefault">DEFAULT · faithful</span>
+        <span class="pv-note" id="noteDefault" data-i18n="algoDefaultNote">Floyd–Steinberg</span>
+        <button type="button" class="ghost hidden" id="pxToggle"
+                style="margin-left:auto; padding:2px 8px; font-size:11px;"></button>
       </div>
       <canvas id="prevDefault" width="400" height="300"></canvas>
       <button type="button" class="pv-pick ghost" data-profile="default"
@@ -188,14 +214,17 @@
 const I18N = {
   en: {
     title:"Inkstone Image Push", s1:"1 · Pick an image",
+    model:"0 · Device model", detected:"detected: ",
     drop:"Click or drag an image here",
-    s2:"2 · Crop (fixed 4:3 · drag to move · wheel / pinch to zoom)",
-    s3:"3 · Compare two algorithms, then pick one", redither:"Re-quantize",
+    s2:"2 · Crop (%R · drag to move · wheel / pinch to zoom)", rotate:"Rotate:",
+    s3:"3 · Compare two algorithms, then pick one", s3e6:"3 · 6-color preview (Floyd–Steinberg)", redither:"Re-quantize",
     exposure:"Exposure", saturation:"Saturation", contrast:"Contrast", resetAdjust:"Reset color",
     toneCurve:"Tone Curve", shadows:"Shadows", midtones:"Midtones", highlights:"Highlights", resetTone:"Reset curve",
-    s4:"4 · Push to device", send:"Show on display (~30 s)",
+    s4:"4 · Push to device", send:"Show on display (~30 s)", sendE6:"Show on display (~40 s)",
     algoDefault:"DEFAULT · faithful", algoDefaultNote:"Floyd–Steinberg",
     algoRetro:"RETRO · vintage", algoRetroNote:"OKLab + hue mask",
+    algoE6:"E6 · Floyd–Steinberg", algoE6Note:"1200×1600 · 6 colors",
+    pxView:"Pixel view", screenView:"Screen effect",
     useDefault:"Use this one", useRetro:"Use this one",
     chosenMark:"Selected ✓",
     chosen:"Will push: ", chosenNone:"Pick one above first",
@@ -223,14 +252,17 @@ const I18N = {
   },
   zh: {
     title:"Inkstone Firmware 本地图传", s1:"1 · 选择图片",
+    model:"0 · 设备型号", detected:"已检测到：",
     drop:"点击选择或拖拽图片到这里",
-    s2:"2 · 裁剪（4:3 固定比例，拖动移动 · 滚轮/双指缩放）",
-    s3:"3 · 并排对比两种算法，选一个推送", redither:"重新量化",
+    s2:"2 · 裁剪（%R，拖动移动 · 滚轮/双指缩放）", rotate:"旋转：",
+    s3:"3 · 并排对比两种算法，选一个推送", s3e6:"3 · 6 色预览（Floyd–Steinberg）", redither:"重新量化",
     exposure:"曝光", saturation:"饱和度", contrast:"对比度", resetAdjust:"重置调色",
     toneCurve:"影调曲线", shadows:"暗部", midtones:"中间调", highlights:"高光", resetTone:"重置曲线",
-    s4:"4 · 上传到设备", send:"刷屏显示（约 30 秒）",
+    s4:"4 · 上传到设备", send:"刷屏显示（约 30 秒）", sendE6:"刷屏显示（约 40 秒）",
     algoDefault:"DEFAULT · 保真", algoDefaultNote:"Floyd–Steinberg",
     algoRetro:"RETRO · 复古", algoRetroNote:"OKLab + 色相掩码",
+    algoE6:"E6 · Floyd–Steinberg", algoE6Note:"1200×1600 · 6 色",
+    pxView:"像素视图", screenView:"屏幕效果",
     useDefault:"用这个推送", useRetro:"用这个推送",
     chosenMark:"已选中 ✓",
     chosen:"将推送：", chosenNone:"请先在上方选一个",
@@ -267,6 +299,7 @@ function applyLang() {
   document.querySelectorAll("[data-i18n-ph]").forEach(el => el.placeholder = t(el.dataset.i18nPh));
   document.querySelectorAll("[data-i18n-aria-label]").forEach(el => el.setAttribute("aria-label", t(el.dataset.i18nAriaLabel)));
   $("langBtn").textContent = lang === "zh" ? "English" : "中文";
+  refreshModelUI();
 }
 $("langBtn").onclick = () => {
   lang = lang === "zh" ? "en" : "zh";
@@ -274,32 +307,78 @@ $("langBtn").onclick = () => {
   applyLang(); refreshInfo();
 };
 
-/* ================= Pixel format (§3, byte-identical to tools/convert_image.py) ====
-   DEFAULT profile — implemented inline below, and the DECODED CANVAS is what
-   gets pushed. Palette (packed RGB): black(0,0,0) white(255,255,255)
-   yellow(255,210,0) red(200,30,30)
-   Distance: d = 299*dr² + 587*dg² + 114*db² (integer)
-   Dithering: Floyd-Steinberg serpentine, error /16 integer accumulation,
-              weights: right 7, lower-left 3, below 5, lower-right 1
-   Packing: byte = c0<<6 | c1<<4 | c2<<2 | c3, row-major, 30000 bytes total
+/* ================= Pixel formats ============================================
+   4-color model (NM-EPD-420-4C): DEFAULT profile implemented inline below and
+   RETRO in web/retro_core.js, both producing the 30000-byte 2bpp frame
+   (byte = c0<<6|c1<<4|c2<<2|c3; 0=black 1=white 2=yellow 3=red), byte-identical
+   to tools/convert_image.py and the firmware.
 
-   RETRO profile — lives in web/retro_core.js (inlined into this page by
-   scripts/gen_embedded_page.py at build time) so the browser and the parity
-   checker share ONE implementation. The two profiles keep separate preview
-   palettes: RETRO's is RETRO_PAL_VIEW inside retro_core.js, and DEFAULT's is
-   PAL_VIEW below. Preview colours never reach the wire.                        */
-const W = 400, H = 300, FRAME_BYTES = 30000;
+   6-color model (Spectra-e6): web/e6_core.js, Floyd-Steinberg only (step 1 of
+   the E6 port), producing the 960000-byte 4bpp frame (byte = c0<<4|c1; nibble =
+   GxEPD2 index 0=black 1=white 2=green 3=blue 4=red 5=yellow), byte-identical
+   to the firmware's quantizePack6().
+
+   Preview colours (PAL_VIEW / RETRO_PAL_VIEW / E6_PAL_VIEW) never reach the
+   wire.                                                                            */
+const MODELS = {
+  nm4c: { key:"nm4c", w:400,  h:300,  colors:4, frameBytes:30000,  ratio:"4:3" },
+  e6:   { key:"e6",   w:1200, h:1600, colors:6, frameBytes:960000, ratio:"3:4" }
+};
+/* Manual choice persists; until the user picks one, the model follows whatever
+   the connected device reports via /status ("colors"). */
+let model = MODELS[localStorage.getItem("ink_model") === "e6" ? "e6" : "nm4c"];
+let modelAuto = localStorage.getItem("ink_model") == null;
+let W = model.w, H = model.h, FRAME_BYTES = model.frameBytes;
 const PAL_PACK = [[0,0,0],[255,255,255],[255,210,0],[200,30,30]];
 const PAL_VIEW = [[20,20,20],[245,243,235],[225,190,25],[185,45,40]];
 
 let srcBitmap = null;
-/* One pre-quantized frame per profile, and which one the user picked. */
+/* One pre-quantized frame per profile, and which one the user picked. The E6
+   model uses only frames.default (Floyd-Steinberg, 4bpp). */
 let frames = { default: null, retro: null };
 let chosen = "default";
 const adjustments = { exposure: 0, saturation: 1, contrast: 1 };
 const tonePoints = [0, 64, 128, 192, 255];
 let adjustmentTimer = null;
 let uploadInProgress = false;
+let quantizeSeq = 0;
+
+/* Texts that depend on the selected model (re-applied after every language
+   switch, because applyLang() resets all data-i18n elements). */
+function refreshModelUI() {
+  const e6 = model.colors === 6;
+  $("s2h").textContent = t("s2").replace("%R", effRatio());
+  document.querySelector('[data-i18n="s3"], [data-i18n="s3e6"]')
+    .textContent = t(e6 ? "s3e6" : "s3");
+  $("titleDefault").textContent = t(e6 ? "algoE6" : "algoDefault");
+  $("noteDefault").textContent = t(e6 ? "algoE6Note" : "algoDefaultNote");
+  $("sendBtn").textContent = t(e6 ? "sendE6" : "send");
+  updatePxToggle();
+}
+
+function setModel(key, fromUser) {
+  model = MODELS[key] || MODELS.nm4c;
+  W = model.w; H = model.h; FRAME_BYTES = model.frameBytes;
+  if (fromUser) {
+    modelAuto = false;
+    localStorage.setItem("ink_model", model.key);
+  }
+  $("modelSel").value = model.key;
+  const e6 = model.colors === 6;
+  $("paneRetro").classList.toggle("hidden", e6);
+  for (const id of ["prevDefault", "prevRetro"]) {
+    $(id).width = W; $(id).height = H;
+  }
+  /* Portrait model gets a taller crop canvas so the 3:4 rect stays usable */
+  cv.height = e6 ? 480 : 360;
+  chosen = "default";
+  frames.default = frames.retro = null;
+  $("sendBtn").disabled = true;
+  refreshModelUI();
+  updateChosen();
+  if (srcBitmap) { initCrop(); quantize(); }
+}
+$("modelSel").onchange = e => setModel(e.target.value, true);
 
 function drawToneCurve() {
   const canvas = $("toneCv"), context = canvas.getContext("2d");
@@ -437,16 +516,43 @@ const cv = $("cropCv"), cx = cv.getContext("2d");
 let crop = { s: 1, x: 0, y: 0 };
 let drag = null, pinch = null;
 
+/* ---------- Rotation (0/90/180/270, clockwise, applied before quantize) ------
+   Rotating 90°/270° swaps the crop rect to the inverse aspect ratio, so a
+   landscape photo can be cropped 4:3 and then rotated into the 3:4 E6 frame. */
+let rotation = 0;
+let e6Smooth = true;   /* E6 preview: area-averaged screen effect vs raw pixels */
+function effRatio() {
+  if (rotation % 180 === 0) return model.ratio;
+  const [a, b] = model.ratio.split(":");
+  return b + ":" + a;
+}
+function updateRotUI() {
+  document.querySelectorAll(".rotbtn").forEach(b =>
+    b.classList.toggle("ghost", Number(b.dataset.rot) !== rotation));
+  refreshModelUI();
+}
+document.querySelectorAll(".rotbtn").forEach(b => b.onclick = () => {
+  rotation = Number(b.dataset.rot);
+  updateRotUI();
+  if (srcBitmap) { initCrop(); quantize(); }
+});
+updateRotUI();
+
 function initCrop() {
-  const iw = srcBitmap.width, ih = srcBitmap.height;
-  crop.s = Math.max(cv.width / iw, cv.height / ih);
-  crop.x = (cv.width - iw * crop.s) / 2;
-  crop.y = (cv.height - ih * crop.s) / 2;
+  const iw = srcBitmap.width, ih = srcBitmap.height, r = cropRect();
+  crop.s = Math.max(r.w / iw, r.h / ih);
+  crop.x = r.x + (r.w - iw * crop.s) / 2;
+  crop.y = r.y + (r.h - ih * crop.s) / 2;
   drawCrop();
 }
+/* Largest rect of the effective aspect ratio (model ratio, swapped when the
+   image is rotated 90°/270°) that fits the crop canvas with a 20px margin. */
 function cropRect() {
-  const m = 20, w = cv.width - 2 * m, h = w * 3 / 4;
-  return { x: m, y: (cv.height - h) / 2, w, h };
+  const m = 20, aw = cv.width - 2 * m, ah = cv.height - 2 * m;
+  const rw = rotation % 180 === 0 ? W : H, rh = rotation % 180 === 0 ? H : W;
+  let w = aw, h = w * rh / rw;
+  if (h > ah) { h = ah; w = h * rw / rh; }
+  return { x: (cv.width - w) / 2, y: (cv.height - h) / 2, w, h };
 }
 function drawCrop() {
   const iw = srcBitmap.width, ih = srcBitmap.height;
@@ -493,23 +599,34 @@ cv.addEventListener("pointermove", e => {
 });
 cv.addEventListener("pointerup", e => { touches.delete(e.pointerId); pinch = null; });
 
-/* ---------- Crop → 400x300 RGB888, shared by both profiles ---------- */
-/* Cropping and scaling happen once; the two quantizers then consume the same
+/* ---------- Crop → WxH RGB888, shared by all profiles ---------- */
+/* Cropping and scaling happen once; the quantizers then consume the same
    pixel buffer. Re-running it per profile would be both slower and a source of
    drift between the previews. */
 function renderCropped() {
   const r = cropRect();
   const sx = (r.x - crop.x) / crop.s, sy = (r.y - crop.y) / crop.s;
   const sw = r.w / crop.s, sh = r.h / crop.s;
+  /* Crop-space canvas: landscape HxW when rotating 90°/270°, else WxH. */
+  const cw = rotation % 180 === 0 ? W : H, ch = rotation % 180 === 0 ? H : W;
   const off = document.createElement("canvas");
-  off.width = W; off.height = H;
+  off.width = cw; off.height = ch;
   const octx = off.getContext("2d", { willReadFrequently: true });
   octx.imageSmoothingEnabled = true; octx.imageSmoothingQuality = "high";
-  octx.drawImage(srcBitmap, sx, sy, sw, sh, 0, 0, W, H);
-  return octx.getImageData(0, 0, W, H);
+  octx.drawImage(srcBitmap, sx, sy, sw, sh, 0, 0, cw, ch);
+  if (rotation % 360 === 0) return octx.getImageData(0, 0, W, H);
+  /* Rotate into the final WxH frame; happens before quantize so the packed
+     bytes stay byte-identical to the firmware for the default 0° case. */
+  const out = document.createElement("canvas");
+  out.width = W; out.height = H;
+  const xctx = out.getContext("2d", { willReadFrequently: true });
+  xctx.translate(W / 2, H / 2);
+  xctx.rotate(rotation * Math.PI / 180);
+  xctx.drawImage(off, -cw / 2, -ch / 2);
+  return xctx.getImageData(0, 0, W, H);
 }
 
-/* Paint a packed 2bpp frame through a preview palette. */
+/* Paint a packed 2bpp frame through a preview palette (4-color model). */
 function paint(cvId, frame, palView) {
   const ctx = $(cvId).getContext("2d");
   const img = ctx.createImageData(W, H);
@@ -526,27 +643,94 @@ function paintRetro(cvId, frame) {
   $(cvId).getContext("2d").putImageData(retroFrameToImageData(frame), 0, 0);
 }
 
-/* ---------- Quantize both profiles + preview ---------- */
-function quantize() {
+/* ---------- E6 preview: simulate what the eye sees on the panel -------------
+   The 1200x1600 panel runs at ~150 DPI, so at normal viewing distance the eye
+   optically averages the Floyd-Steinberg speckle into smooth tones. Painting
+   the frame 1:1 into a 1200x1600 canvas and letting CSS squeeze it to ~300 px
+   aliases the dither (the browser's fast downscale samples a tiny
+   neighbourhood), which makes the preview look far noisier than the panel.
+   Fix: box-average downscale (progressive halving + high-quality final pass)
+   to display size — the same spatial integration the eye performs.
+   e6Smooth=false switches to the raw 1:1 pixel view for dither inspection.
+   (declared up in the rotation block — updateRotUI() reaches it via
+   refreshModelUI() before this point in the file) */
+function downscaleInto(srcCanvas, dst) {
+  let cur = srcCanvas;
+  while (cur.width >> 1 >= dst.width && cur.height >> 1 >= dst.height) {
+    const half = document.createElement("canvas");
+    half.width = cur.width >> 1; half.height = cur.height >> 1;
+    const hctx = half.getContext("2d");
+    hctx.imageSmoothingEnabled = true; hctx.imageSmoothingQuality = "high";
+    hctx.drawImage(cur, 0, 0, half.width, half.height);
+    cur = half;
+  }
+  const dctx = dst.getContext("2d");
+  dctx.imageSmoothingEnabled = true; dctx.imageSmoothingQuality = "high";
+  dctx.drawImage(cur, 0, 0, dst.width, dst.height);
+}
+function paintE6(frame) {
+  const dst = $("prevDefault");
+  if (e6Smooth) {
+    dst.width = 480; dst.height = 640;   /* ~2.5x box average of the frame */
+    const full = document.createElement("canvas");
+    full.width = W; full.height = H;
+    full.getContext("2d").putImageData(e6FrameToImageData(frame), 0, 0);
+    downscaleInto(full, dst);
+  } else {
+    dst.width = W; dst.height = H;
+    dst.getContext("2d").putImageData(e6FrameToImageData(frame), 0, 0);
+  }
+}
+function updatePxToggle() {
+  const btn = $("pxToggle");
+  btn.classList.toggle("hidden", model.colors !== 6);
+  btn.textContent = e6Smooth ? t("pxView") : t("screenView");
+}
+$("pxToggle").onclick = () => {
+  e6Smooth = !e6Smooth;
+  updatePxToggle();
+  if (model.colors === 6 && frames.default) paintE6(frames.default);
+};
+
+/* ---------- Quantize + preview ---------- */
+/* Async so the "quantizing" state can paint before 1.92M pixels of
+   Floyd-Steinberg block the thread (E6 takes ~1-2 s; 4C is instant). A run
+   counter drops stale runs when the user adjusts faster than we quantize. */
+async function quantize() {
   if (!srcBitmap) return;
   clearTimeout(adjustmentTimer);
+  const run = ++quantizeSeq;
+  const e6 = model.colors === 6;
+  msg(t("quantizing"), "info");
+  $("sendBtn").disabled = true;
+  $("paneDefault").classList.add("busy");
+  if (!e6) $("paneRetro").classList.add("busy");
+  await new Promise(r => setTimeout(r, 30));
+  if (run !== quantizeSeq || !srcBitmap) return;
+
   const t0 = performance.now();
   const src = renderCropped();
   const toneCurve = makeToneCurve(tonePoints);
   const adjusted = adjustColorPixels(src.data, adjustments.exposure,
                                      adjustments.saturation, adjustments.contrast, toneCurve);
 
-  /* DEFAULT: the original all-integer path, unchanged. Its frame is what the
-     page has always pushed and is byte-identical to the firmware's. */
-  msg(t("quantizingDefault"), "info");
-  frames.default = quantizeDefault(adjusted.rgba);
-  paint("prevDefault", frames.default, PAL_VIEW);
+  if (e6) {
+    /* SPECTRA-E6: one profile only (step 1) — 6-color Floyd-Steinberg,
+       byte-identical to the firmware's quantizePack6(). */
+    frames.default = e6QuantizeFS(adjusted.rgba);
+    frames.retro = null;
+    paintE6(frames.default);
+  } else {
+    /* DEFAULT: the original all-integer path, unchanged. Its frame is what the
+       page has always pushed and is byte-identical to the firmware's. */
+    frames.default = quantizeDefault(adjusted.rgba);
+    paint("prevDefault", frames.default, PAL_VIEW);
 
-  /* RETRO: one shared implementation with the parity checker. It is far
-     heavier (OKLab per pixel), so announce it before blocking the thread. */
-  msg(t("quantizingRetro"), "info");
-  frames.retro = retroQuantize(adjusted.rgb, true, adjustments.contrast === 1 && !toneCurve);
-  paintRetro("prevRetro", frames.retro);
+    /* RETRO: one shared implementation with the parity checker. It is far
+       heavier (OKLab per pixel), so announce it before blocking the thread. */
+    frames.retro = retroQuantize(adjusted.rgb, true, adjustments.contrast === 1 && !toneCurve);
+    paintRetro("prevRetro", frames.retro);
+  }
 
   $("paneDefault").classList.remove("busy");
   $("paneRetro").classList.remove("busy");
@@ -609,9 +793,9 @@ function updateChosen() {
     b.textContent = t(on ? "chosenMark"
                          : (b.dataset.profile === "retro" ? "useRetro" : "useDefault"));
   });
-  $("chosenNote").textContent = frames[chosen]
-    ? t("chosen") + t(chosen === "retro" ? "algoRetro" : "algoDefault")
-    : "";
+  const name = model.colors === 6 ? t("algoE6")
+             : t(chosen === "retro" ? "algoRetro" : "algoDefault");
+  $("chosenNote").textContent = frames[chosen] ? t("chosen") + name : "";
 }
 document.querySelectorAll(".pv-pick").forEach(btn => {
   btn.addEventListener("click", () => {
@@ -671,6 +855,12 @@ async function refreshInfo() {
     const s = await (await fetch("/status")).json();
     $("modeBadge").textContent = s.mode === "ap" ? t("modeAP") : "STA";
     $("devInfo").textContent = s.board + " · fw " + s.fw + " · " + s.ip;
+    $("modelNote").textContent = s.board ? t("detected") + s.board : "";
+    /* Until the user picks a model manually, follow the connected device */
+    if (modelAuto && (s.colors === 4 || s.colors === 6)) {
+      const key = s.colors === 6 ? "e6" : "nm4c";
+      if (key !== model.key) setModel(key, false);
+    }
     $("statusBox").innerHTML =
       "<b>" + t("battery") + "</b> " + s.battery_mv + " mV · <b>" + t("refresh") + "</b> " +
       (s.busy ? t("busy") : t("idle")) +
@@ -705,6 +895,7 @@ $("openBtn").onclick = async () => {
   if (r.ok) { authOpen = !authOpen;
     $("openBtn").textContent = authOpen ? t("openOn") : t("openOff"); }
 };
+setModel(model.key, false);   // applies localStorage choice / nm4c default
 applyLang();
 refreshInfo();
 setInterval(refreshInfo, 15000);

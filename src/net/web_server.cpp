@@ -17,8 +17,12 @@ namespace web {
 
 static WebServer s_server(80);
 
-// ─── Upload staging (PSRAM, streamed 30000B receive) ────────────────────────
-static uint8_t* s_uploadBuf = nullptr;
+// ─── Upload staging (streams straight into the display staging buffer) ──────
+// The display service owns the EPD_FRAME_BYTES staging buffer (s_pending);
+// writing the upload into it directly avoids a second 960KB PSRAM buffer on
+// the Spectra E6. stagingBuffer() returns nullptr while a refresh is running,
+// which we surface as a 409 at the end of the upload.
+static uint8_t* s_uploadTarget = nullptr;
 static size_t   s_uploadLen = 0;
 static bool     s_uploadOverflow = false;
 
@@ -28,11 +32,12 @@ static void sendJson(int code, const String& body) {
 }
 
 static String statusJson() {
-    char buf[448];
+    char buf[512];
     snprintf(buf, sizeof(buf),
         "{\"busy\":%s,\"last_update\":%u,\"battery_mv\":%u,"
         "\"ip\":\"%s\",\"ssid\":\"%s\",\"mode\":\"%s\",\"sleep_in_s\":%u,"
-        "\"fw\":\"%s\",\"board\":\"%s\",\"frame_bytes\":%u,\"mac\":\"%s\"}",
+        "\"fw\":\"%s\",\"board\":\"%s\",\"frame_bytes\":%u,\"mac\":\"%s\","
+        "\"epd_w\":%u,\"epd_h\":%u,\"colors\":%u}",
         display::isBusy() ? "true" : "false",
         display::lastRefreshEpoch(),
         battery::readMv(),
@@ -41,7 +46,8 @@ static String statusJson() {
         wifiportal::mode() == wifiportal::Mode::STA ? "sta" : "ap",
         sleepman::sleepInS(),
         FW_VERSION, BOARD_NAME, (unsigned)EPD_FRAME_BYTES,
-        wifiportal::macAddress().c_str());
+        wifiportal::macAddress().c_str(),
+        (unsigned)EPD_WIDTH, (unsigned)EPD_HEIGHT, (unsigned)EPD_COLORS);
     return String(buf);
 }
 
@@ -87,13 +93,14 @@ static void handleDisplayUpload() {
     if (s_server.header("Content-Type").startsWith("multipart/")) {
         HTTPUpload& up = s_server.upload();
         if (up.status == UPLOAD_FILE_START) {
+            s_uploadTarget = display::stagingBuffer();
             s_uploadLen = 0;
-            s_uploadOverflow = false;
+            s_uploadOverflow = (s_uploadTarget == nullptr);
         } else if (up.status == UPLOAD_FILE_WRITE) {
             if (s_uploadLen + up.currentSize > EPD_FRAME_BYTES) {
                 s_uploadOverflow = true;
-            } else if (s_uploadBuf) {
-                memcpy(s_uploadBuf + s_uploadLen, up.buf, up.currentSize);
+            } else if (s_uploadTarget) {
+                memcpy(s_uploadTarget + s_uploadLen, up.buf, up.currentSize);
                 s_uploadLen += up.currentSize;
             }
         }
@@ -101,13 +108,14 @@ static void handleDisplayUpload() {
     }
     HTTPRaw& raw = s_server.raw();
     if (raw.status == RAW_START) {
+        s_uploadTarget = display::stagingBuffer();
         s_uploadLen = 0;
-        s_uploadOverflow = false;
+        s_uploadOverflow = (s_uploadTarget == nullptr);
     } else if (raw.status == RAW_WRITE) {
         if (s_uploadLen + raw.currentSize > EPD_FRAME_BYTES) {
             s_uploadOverflow = true;
-        } else if (s_uploadBuf) {
-            memcpy(s_uploadBuf + s_uploadLen, raw.buf, raw.currentSize);
+        } else if (s_uploadTarget) {
+            memcpy(s_uploadTarget + s_uploadLen, raw.buf, raw.currentSize);
             s_uploadLen += raw.currentSize;
         }
     }
@@ -117,7 +125,8 @@ static void handleDisplayPost() {
     sleepman::notifyActivity();
 
     if (s_uploadOverflow || s_uploadLen != EPD_FRAME_BYTES) {
-        sendJson(400, "{\"error\":\"frame must be exactly 30000 bytes\"}");
+        sendJson(400, String("{\"error\":\"frame must be exactly ")
+                      + String((unsigned)EPD_FRAME_BYTES) + " bytes\"}");
         return;
     }
     if (display::isBusy()) {
@@ -131,7 +140,7 @@ static void handleDisplayPost() {
                       + String(wait) + "}");
         return;
     }
-    if (!display::submitFrame(s_uploadBuf, EPD_FRAME_BYTES)) {
+    if (!display::submitStagedFrame()) {
         sendJson(409, "{\"error\":\"refresh in progress\",\"retry_after_s\":30}");
         return;
     }
@@ -186,9 +195,6 @@ static void handleNotFound() {
 WebServer& server() { return s_server; }
 
 void begin() {
-    s_uploadBuf = (uint8_t*)ps_malloc(EPD_FRAME_BYTES);
-    if (!s_uploadBuf) Serial.println("[web] upload buffer alloc failed");
-
     s_server.on("/", HTTP_GET, handleRoot);
     s_server.on("/status", HTTP_GET, handleStatus);
     s_server.on("/setup-info", HTTP_GET, handleSetupInfo);

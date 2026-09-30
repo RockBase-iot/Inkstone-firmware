@@ -18,8 +18,17 @@ namespace api {
 
 static WebServer* s_srv = nullptr;
 
-// Image upload staging (JPEG/PNG may exceed 30000B; 2MB cap)
+// Image upload staging. 4-color boards accept JPEG/PNG up to 2MB and decode
+// them on-device. On the Spectra E6 (frame = 960KB, PSRAM = 4MB) the cap is
+// the frame size itself: the intended channel is the web page, which
+// quantizes in the browser and pushes the packed 4bpp frame. On-device
+// decode still works for small images (the RGB565 source must fit in the
+// remaining PSRAM).
+#if EPD_COLORS == 6
+static const size_t IMG_MAX = EPD_FRAME_BYTES;
+#else
 static const size_t IMG_MAX = 2 * 1024 * 1024;
+#endif
 static uint8_t* s_imgBuf = nullptr;
 static size_t   s_imgLen = 0;
 static bool     s_imgOverflow = false;
@@ -177,17 +186,28 @@ static void handleDisplay() {
     } else if (s_srv->arg("dither") == "off") {
         prof = imagepipe::Profile::IPP_NONE;
     }
+#if EPD_COLORS == 6
+    if (prof == imagepipe::Profile::IPP_RETRO) {
+        sendJson(400, "{\"error\":\"retro is a 4-color profile; on Spectra E6 use default|none\"}");
+        return;
+    }
+#endif
 
-    uint8_t* frame = (uint8_t*)ps_malloc(EPD_FRAME_BYTES);
-    if (!frame) { sendJson(500, "{\"error\":\"oom\"}"); return; }
+    // Decode/quantize directly into the display staging buffer: avoids a
+    // transient EPD_FRAME_BYTES allocation (960KB on E6) next to s_imgBuf.
+    uint8_t* frame = display::stagingBuffer();
+    if (!frame) {
+        sendJson(409, "{\"error\":\"refresh in progress\",\"retry_after_s\":30}");
+        return;
+    }
 
     bool ok = false;
     if (ct.startsWith("application/octet-stream")) {
         // Already-quantized raw frame: `profile` is meaningless here, the
         // client (e.g. web/uploader.html) did the quantization itself.
         if (s_imgLen != EPD_FRAME_BYTES) {
-            sendJson(400, "{\"error\":\"raw frame must be exactly 30000 bytes\"}");
-            free(frame);
+            sendJson(400, String("{\"error\":\"raw frame must be exactly ")
+                          + String((unsigned)EPD_FRAME_BYTES) + " bytes\"}");
             return;
         }
         memcpy(frame, s_imgBuf, EPD_FRAME_BYTES);
@@ -198,28 +218,26 @@ static void handleDisplay() {
         ok = imagepipe::convertPng(s_imgBuf, s_imgLen, frame, prof);
     } else {
         sendJson(415, "{\"error\":\"supported: application/octet-stream, image/jpeg, image/png\"}");
-        free(frame);
         return;
     }
 
     if (!ok) {
-        free(frame);
         if (prof == imagepipe::Profile::IPP_RETRO) {
             // RETRO holds work+mask+err at once (~1.9 MB); PSRAM exhaustion is
             // the realistic failure mode, so name it.
             sendJson(422, "{\"error\":\"decode/quantize failed\","
                           "\"hint\":\"retro requires more PSRAM\"}");
         } else {
-            sendJson(422, "{\"error\":\"decode/quantize failed\"}");
+            sendJson(422, "{\"error\":\"decode/quantize failed\","
+                          "\"hint\":\"on Spectra E6 large sources may not fit; "
+                          "use the web page to quantize and push a packed frame\"}");
         }
         return;
     }
-    if (!display::submitFrame(frame, EPD_FRAME_BYTES)) {
-        free(frame);
+    if (!display::submitStagedFrame()) {
         sendJson(409, "{\"error\":\"refresh in progress\",\"retry_after_s\":30}");
         return;
     }
-    free(frame);
     sendJson(202, "{\"accepted\":true,\"refresh_eta_s\":30}");
 }
 

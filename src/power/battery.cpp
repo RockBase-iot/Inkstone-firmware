@@ -8,8 +8,11 @@
 namespace battery {
 
 uint32_t readMv() {
-    pinMode(PIN_ADC_EN, OUTPUT);
-    digitalWrite(PIN_ADC_EN, HIGH);
+    if (PIN_BATT_ADC < 0) return 0;   // board has no battery divider
+    if (PIN_ADC_EN >= 0) {
+        pinMode(PIN_ADC_EN, OUTPUT);
+        digitalWrite(PIN_ADC_EN, HIGH);
+    }
     delay(BATT_ADC_SETTLE_MS);
 
     analogReadResolution(12);
@@ -22,7 +25,7 @@ uint32_t readMv() {
         samples[i] = analogReadMilliVolts(PIN_BATT_ADC);
         delay(2);
     }
-    digitalWrite(PIN_ADC_EN, LOW);
+    if (PIN_ADC_EN >= 0) digitalWrite(PIN_ADC_EN, LOW);
 
     std::sort(samples, samples + BATT_ADC_SAMPLES);
     uint32_t median = samples[BATT_ADC_SAMPLES / 2];

@@ -11,9 +11,13 @@
 //     clients poll /status for busy
 //   - powerOff() after refresh to cut panel drive voltage (prevents ghosting)
 //
-// Pixel format (plan section 3): 2 bits/px, 0=black 1=white 2=yellow 3=red,
-// 4 pixels per byte MSB first, row-major, EPD_FRAME_BYTES per frame —
-// bit-identical to the panel line format, so writeNative() can push it raw.
+// Pixel formats:
+//   4-color panels: 2 bits/px, 0=black 1=white 2=yellow 3=red, 4 pixels per
+//   byte MSB first, row-major — bit-identical to the panel line format, so
+//   writeNative() can push it raw.
+//   6-color Spectra E6: 4 bits/px, 2 pixels per byte MSB nibble first, nibble =
+//   GxEPD2 7-color index (0 black 1 white 2 green 3 blue 4 red 5 yellow);
+//   the driver translates to panel-native codes when clocking the frame out.
 // ============================================================================
 
 #include <Arduino.h>
@@ -33,6 +37,14 @@ bool isInitialized();
 // len must be == EPD_FRAME_BYTES; returns false while refreshing (caller
 // should respond 409).
 bool submitFrame(const uint8_t* frame, size_t len);
+
+// Zero-copy variant for large frames (Spectra E6: 960KB — an extra copy would
+// strain the C5's 4MB PSRAM). stagingBuffer() returns the internal staging
+// buffer while the service is IDLE, nullptr while refreshing. The HTTP layer
+// streams the upload straight into it, then submitStagedFrame() starts the
+// refresh without a copy. Do not write past EPD_FRAME_BYTES.
+uint8_t* stagingBuffer();
+bool submitStagedFrame();
 
 // Built-in 4-color stripe test pattern (T1 acceptance / factory self-check).
 void showTestPattern();

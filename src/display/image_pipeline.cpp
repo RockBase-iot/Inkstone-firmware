@@ -9,6 +9,21 @@
 
 namespace imagepipe {
 
+#if EPD_COLORS == 6
+// ─── 6-color Spectra E6 palette (wire order = GxEPD2 7-color indices) ──────
+// 0 black, 1 white, 2 green, 3 blue, 4 red, 5 yellow. Packing RGB values match
+// the reference dither service palette (esp32-spectra-e6 ImageScreen.cpp):
+// 000000, ffffff, 00cc00, 0033cc, cc0000, e6e600.
+static const int16_t PAL[6][3] = {
+    {0, 0, 0},        // 0 black
+    {255, 255, 255},  // 1 white
+    {0, 204, 0},      // 2 green
+    {0, 51, 204},     // 3 blue
+    {204, 0, 0},      // 4 red
+    {230, 230, 0},    // 5 yellow
+};
+static const int PAL_N = 6;
+#else
 // ─── 4-color palette (packing RGB, identical on all three ports) ────────────
 static const int16_t PAL[4][3] = {
     {0, 0, 0},        // 0 black
@@ -16,11 +31,13 @@ static const int16_t PAL[4][3] = {
     {255, 210, 0},    // 2 yellow
     {200, 30, 30},    // 3 red
 };
+static const int PAL_N = 4;
+#endif
 
 static inline int nearestColor(int r, int g, int b) {
     int best = 0;
     int32_t bestD = INT32_MAX;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < PAL_N; ++i) {
         int32_t dr = r - PAL[i][0], dg = g - PAL[i][1], db = b - PAL[i][2];
         int32_t d = 299 * dr * dr + 587 * dg * dg + 114 * db * db;
         if (d < bestD) { bestD = d; best = i; }
@@ -38,6 +55,91 @@ static inline int32_t idivFloor(int32_t a, int32_t b) {
 static inline int clamp255(int32_t v) { return v < 0 ? 0 : (v > 255 ? 255 : (int)v); }
 
 // ─── Quantize + pack ────────────────────────────────────────────────────────
+#if EPD_COLORS == 6
+
+// 6-color 4bpp: nibble = palette index, 2 px/byte MSB first.
+// Floyd-Steinberg with the same integer arithmetic as the 4-color path and
+// web/e6_core.js (error accumulated as 1/16, weights 7/3/5/1, serpentine),
+// but with rolling two-row error buffers: at 1200x1600 a full-frame int32
+// error field would need 23MB, far beyond the C5's 4MB PSRAM.
+static void quantizePack6(const uint16_t* src, int srcW, int srcH,
+                          int cropX, int cropY, int cropW, int cropH,
+                          uint8_t* out, bool dither) {
+    const int W = EPD_WIDTH, H = EPD_HEIGHT;
+    memset(out, 0, EPD_FRAME_BYTES);
+
+    int32_t* errR = nullptr; int32_t* errG = nullptr; int32_t* errB = nullptr;
+    if (dither) {
+        errR = (int32_t*)ps_calloc(2 * W, sizeof(int32_t));
+        errG = (int32_t*)ps_calloc(2 * W, sizeof(int32_t));
+        errB = (int32_t*)ps_calloc(2 * W, sizeof(int32_t));
+        if (!errR || !errG || !errB) {   // fall back to nearest-color
+            free(errR); free(errG); free(errB);
+            errR = errG = errB = nullptr;
+            dither = false;
+            Serial.println("[img] e6 dither buffers alloc failed, nearest-color");
+        }
+    }
+
+    uint8_t* rowRgb = (uint8_t*)ps_malloc(W * 3);
+    if (!rowRgb) {   // should never happen (3.6KB); fill white and bail
+        memset(out, 0x11, EPD_FRAME_BYTES);
+        free(errR); free(errG); free(errB);
+        return;
+    }
+
+    for (int y = 0; y < H; ++y) {
+        // Nearest-neighbor scale of one source row into RGB888
+        int sy = cropY + (int)((int64_t)y * cropH / H);
+        const uint16_t* srow = src + (size_t)sy * srcW;
+        for (int x = 0; x < W; ++x) {
+            int sx = cropX + (int)((int64_t)x * cropW / W);
+            uint16_t p = srow[sx];
+            rowRgb[x * 3]     = (uint8_t)(((p >> 11) & 0x1F) * 255 / 31);
+            rowRgb[x * 3 + 1] = (uint8_t)(((p >> 5) & 0x3F) * 255 / 63);
+            rowRgb[x * 3 + 2] = (uint8_t)((p & 0x1F) * 255 / 31);
+        }
+
+        int32_t* curR = errR + (y & 1) * W;
+        int32_t* curG = errG + (y & 1) * W;
+        int32_t* curB = errB + (y & 1) * W;
+        int32_t* nxtR = errR + ((y + 1) & 1) * W;
+        int32_t* nxtG = errG + ((y + 1) & 1) * W;
+        int32_t* nxtB = errB + ((y + 1) & 1) * W;
+        if (dither) { memset(nxtR, 0, W * 4); memset(nxtG, 0, W * 4); memset(nxtB, 0, W * 4); }
+
+        const bool fwd = (y % 2 == 0);
+        uint8_t* orow = out + (size_t)y * (W / 2);
+        for (int xi = 0; xi < W; ++xi) {
+            int x = fwd ? xi : (W - 1 - xi);
+            int r, g, b;
+            if (dither) {
+                r = clamp255(idivFloor(rowRgb[x * 3]     * 16 + curR[x] + 8, 16));
+                g = clamp255(idivFloor(rowRgb[x * 3 + 1] * 16 + curG[x] + 8, 16));
+                b = clamp255(idivFloor(rowRgb[x * 3 + 2] * 16 + curB[x] + 8, 16));
+            } else {
+                r = rowRgb[x * 3]; g = rowRgb[x * 3 + 1]; b = rowRgb[x * 3 + 2];
+            }
+            int c = nearestColor(r, g, b);
+            if (x & 1) orow[x >> 1] |= (uint8_t)c;
+            else       orow[x >> 1] |= (uint8_t)(c << 4);
+
+            if (!dither) continue;
+            int32_t er = (r - PAL[c][0]), eg = (g - PAL[c][1]), eb = (b - PAL[c][2]);
+            int xr = fwd ? x + 1 : x - 1;              // right (serpentine direction)
+            if (xr >= 0 && xr < W) { curR[xr] += er * 7; curG[xr] += eg * 7; curB[xr] += eb * 7; }
+            int xl = fwd ? x - 1 : x + 1;              // down-left
+            if (xl >= 0 && xl < W) { nxtR[xl] += er * 3; nxtG[xl] += eg * 3; nxtB[xl] += eb * 3; }
+            nxtR[x] += er * 5; nxtG[x] += eg * 5; nxtB[x] += eb * 5;
+            if (xr >= 0 && xr < W) { nxtR[xr] += er; nxtG[xr] += eg; nxtB[xr] += eb; }
+        }
+    }
+    free(rowRgb);
+    free(errR); free(errG); free(errB);
+}
+
+#else // EPD_COLORS == 4
+
 // rgb: EPD_WIDTH*EPD_HEIGHT*3, row-major RGB888
 static void quantizePack(const uint8_t* rgb, uint8_t* out, bool dither) {
     const int W = EPD_WIDTH, H = EPD_HEIGHT;
@@ -90,16 +192,30 @@ static void quantizePack(const uint8_t* rgb, uint8_t* out, bool dither) {
     free(errR); free(errG); free(errB);
 }
 
-// ─── RGB565 -> center-crop 4:3 -> scale to panel size -> quantize + pack ────
+#endif // EPD_COLORS == 4
+
+// ─── RGB565 -> center-crop to panel aspect -> scale -> quantize + pack ──────
 static bool composeFrameImpl(const uint16_t* src, int srcW, int srcH,
                              uint8_t* out, Profile prof) {
     if (!src || srcW <= 0 || srcH <= 0) return false;
 
-    // Center-crop to 4:3 (EPD_WIDTH:EPD_HEIGHT)
+    // Center-crop to the panel aspect ratio (EPD_WIDTH:EPD_HEIGHT)
     int cropW = srcW, cropH = srcW * EPD_HEIGHT / EPD_WIDTH;
     if (cropH > srcH) { cropH = srcH; cropW = srcH * EPD_WIDTH / EPD_HEIGHT; }
     int offX = (srcW - cropW) / 2, offY = (srcH - cropH) / 2;
 
+#if EPD_COLORS == 6
+    // RETRO is a 4-color profile (OKLab palette tuned for BWRY); on E6 the
+    // Floyd-Steinberg path is the only supported one (step 1 of the E6 port).
+    if (prof == Profile::IPP_RETRO) {
+        Serial.println("[img] retro profile not supported on 6-color panels");
+        return false;
+    }
+    // Streams row by row: no full-size RGB888 buffer (5.76MB at 1200x1600)
+    quantizePack6(src, srcW, srcH, offX, offY, cropW, cropH, out,
+                  prof != Profile::IPP_NONE);
+    return true;
+#else
     uint8_t* rgb = (uint8_t*)ps_malloc(EPD_WIDTH * EPD_HEIGHT * 3);
     if (!rgb) { Serial.println("[img] rgb buffer alloc failed"); return false; }
 
@@ -124,6 +240,7 @@ static bool composeFrameImpl(const uint16_t* src, int srcW, int srcH,
                   : (quantizePack(rgb, out, prof != Profile::IPP_NONE), true);
     free(rgb);
     return ok;
+#endif
 }
 
 bool composeFrame(const uint16_t* src, int srcW, int srcH,

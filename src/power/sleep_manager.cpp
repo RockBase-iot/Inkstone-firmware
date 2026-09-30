@@ -8,6 +8,7 @@
 #include <WiFi.h>
 #include <esp_wifi.h>
 #include <esp_sleep.h>
+#include <soc/soc_caps.h>
 #include <Preferences.h>
 
 namespace sleepman {
@@ -82,14 +83,31 @@ static void enterDeepSleep() {
     // (3) pull all peripheral-enable pins low
     const int8_t enPins[] = {PIN_LORA_EN, PIN_CODEC_EN, PIN_TEMP_CTL,
                              PIN_PA_CTRL, PIN_ADC_EN};
-    for (int8_t p : enPins) { pinMode(p, OUTPUT); digitalWrite(p, LOW); }
+    for (int8_t p : enPins) {
+        if (p < 0) continue;   // board has no such rail
+        pinMode(p, OUTPUT); digitalWrite(p, LOW);
+    }
 
     // (4) Wi-Fi off
     WiFi.disconnect(true);
     esp_wifi_stop();
 
-    // (5) wake sources: BOOT key (pressed = LOW) + optional timer
-    esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BOOT_BTN, 0);
+    // (5) wake sources: BOOT key (pressed = LOW) + optional timer.
+    // ext0 needs both chip support and an RTC GPIO. ESP32-C5 has no ext0 at
+    // all (SOC_PM_SUPPORT_EXT0_WAKEUP=0); on other chips a non-RTC pin
+    // (e.g. C5 DevKitC-1 BOOT key on GPIO28) just logs a warning and we sleep
+    // with the timer only.
+#if SOC_PM_SUPPORT_EXT0_WAKEUP
+    if (PIN_BOOT_BTN >= 0) {
+        esp_err_t we = esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BOOT_BTN, 0);
+        if (we != ESP_OK) {
+            Serial.printf("[sleep] BOOT key (GPIO%d) cannot wake from deep sleep (%s); "
+                          "timer wake only\n", PIN_BOOT_BTN, esp_err_to_name(we));
+        }
+    }
+#else
+    Serial.println("[sleep] chip has no ext0 wakeup; timer wake only");
+#endif
     if (s_params.schedWakeS > 0 && pull::configured()) {
         uint32_t period = max(s_params.schedWakeS, s_params.minRefreshIntervalS);
         esp_sleep_enable_timer_wakeup((uint64_t)period * 1000000ULL);

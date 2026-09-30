@@ -13,6 +13,8 @@
 
 #if defined(BOARD_NM_EPD_420_4C)
   #include "boards/nm_epd_420_4c.h"
+#elif defined(BOARD_ESP32_C5_SPECTRA_E6)
+  #include "boards/esp32_c5_spectra_e6.h"
 // Add future boards here:
 // #elif defined(BOARD_NM_EPD_XXX_4C)
 //   #include "boards/nm_epd_xxx_4c.h"
@@ -37,16 +39,22 @@
   #error "board header must define EPD_HEIGHT"
 #endif
 #ifndef EPD_COLORS
-  #error "board header must define EPD_COLORS (4 = BWRY 2bpp)"
+  #error "board header must define EPD_COLORS (4 = BWRY 2bpp, 6 = Spectra E6 4bpp)"
 #endif
 #ifndef EPD_FRAME_BYTES
   #error "board header must define EPD_FRAME_BYTES"
 #endif
 
-// The quantize/pack/direct-write pipeline currently implements only 4-color
-// 2bpp (pixel format facts, plan section 3). A new panel with the same
-// 4-color 2bpp MSB-first line format can reuse it directly; other formats
-// require extending image_pipeline and display_service.
-#if EPD_COLORS != 4
-  #error "Only 4-color (2bpp BWRY) panels are implemented so far."
+// Byte filled with the panel's "white" pixel code (4C 2bpp: 0x55, E6 4bpp: 0x11).
+#ifndef EPD_BYTE_WHITE
+  #define EPD_BYTE_WHITE 0x55
+#endif
+
+// Two pixel formats are implemented:
+//   EPD_COLORS == 4: 2bpp BWRY, byte = c0<<6|c1<<4|c2<<2|c3 (plan section 3)
+//   EPD_COLORS == 6: 4bpp Spectra E6, byte = c0<<4|c1, nibble = GxEPD2 7-color
+//                    index (0 black 1 white 2 green 3 blue 4 red 5 yellow)
+// Any other panel requires extending image_pipeline and display_service.
+#if EPD_COLORS != 4 && EPD_COLORS != 6
+  #error "Only 4-color (2bpp BWRY) and 6-color (4bpp Spectra E6) panels are implemented."
 #endif

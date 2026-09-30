@@ -12,20 +12,23 @@ Use `nm_epd_420_4c.h` as the template. The following macros are required
 | macro | meaning |
 |---|---|
 | `BOARD_NAME` | board name string |
-| `BOARD_MDNS_HOST` | mDNS base name (runtime adds MAC suffix → `<host>-xxxxxx.local`) |
+| `BOARD_MDNS_HOST` | fixed mDNS hostname (`<host>.local`) |
 | `BOARD_AP_SSID_PREFIX` / `BOARD_AP_DEFAULT_PASS` | AP hotspot prefix (runtime: `prefix + last 3 MAC bytes`, distinguishes multiple devices) and default password |
 | `EPD_WIDTH` / `EPD_HEIGHT` | panel resolution |
-| `EPD_COLORS` | color count (only 4-color 2bpp implemented so far) |
-| `EPD_FRAME_BYTES` | full frame size in bytes (4-color = W*H/4) |
-| `PIN_EPD_*` | EPD SPI pins (SCK/MOSI/CS/DC/RST/BUSY) |
-| `PIN_BOOT_BTN` | RTC GPIO wake button |
-| `PIN_LORA_EN / CODEC_EN / ADC_EN / TEMP_CTL / PA_CTRL` | peripheral power enables (point NC pins somewhere safe and adjust the pre-sleep sequence) |
+| `EPD_COLORS` | color count (4 = 2bpp BWRY, 6 = 4bpp Spectra E6; see `esp32_c5_spectra_e6.h`) |
+| `EPD_FRAME_BYTES` | full frame size in bytes (4-color = W*H/4, 6-color = W*H/2) |
+| `EPD_BYTE_WHITE` | optional, byte of "white" pixels (default 0x55; E6 uses 0x11) |
+| `PIN_EPD_*` | EPD SPI pins (SCK/MOSI/CS/DC/RST/BUSY; dual-controller panels also define `PIN_EPD_CS_S`) |
+| `PIN_BOOT_BTN` | RTC GPIO wake button (use -1 if none; a non-RTC GPIO compiles but only logs a warning at sleep time) |
+| `PIN_LORA_EN / CODEC_EN / ADC_EN / TEMP_CTL / PA_CTRL` | peripheral power enables (-1 = not present; skipped by the pre-sleep sequence) |
 | `PIN_BATT_ADC / BATT_ADC_DIV / BATT_ADC_*` | battery ADC |
 | Sleep defaults such as `IDLE_TIMEOUT_S` | see `nm_epd_420_4c.h` |
 
 If the new panel uses a different GxEPD2 driver class, add an
 `#elif defined(BOARD_<NAME>)` branch to the driver-selection block in
-`src/display/display_service.cpp`.
+`src/display/display_service.cpp`. Dual-controller panels (e.g. the 1200x1600
+Spectra E6) can instead instantiate a custom driver directly there, as the
+`BOARD_ESP32_C5_SPECTRA_E6` branch does with `src/drivers/epd1200x1600_e6.*`.
 
 ## 2. Add an env in platformio.ini
 
@@ -86,7 +89,7 @@ Design notes for the 6-color generation:
 | 宏 | 说明 |
 |---|---|
 | `BOARD_NAME` | 板名字符串 |
-| `BOARD_MDNS_HOST` | mDNS 基础名（运行时追加 MAC 后缀 → `<host>-xxxxxx.local`） |
+| `BOARD_MDNS_HOST` | 固定 mDNS 主机名（`<host>.local`） |
 | `BOARD_AP_SSID_PREFIX` / `BOARD_AP_DEFAULT_PASS` | 配网热点前缀（运行时为 `前缀+MAC后三字节`，多设备区分）与默认密码 |
 | `EPD_WIDTH` / `EPD_HEIGHT` | 面板分辨率 |
 | `EPD_COLORS` | 颜色数（当前仅实现 4 色 2bpp） |

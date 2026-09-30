@@ -52,6 +52,23 @@ def _factory_offset(env):
     return 0x10000
 
 
+def _bootloader_offset(env):
+    """Bootloader flash offset per chip. ESP32-C5/P4 ROMs load the bootloader
+    from 0x2000 (NOT 0x0): pioarduino builder/frameworks/espidf.py maps it as
+        0x1000 if mcu in (esp32, esp32s2)
+        0x2000 if mcu in (esp32c5, esp32p4)
+        0x0    otherwise (esp32s3, esp32c3, ...)
+    Matching CONFIG_BOOTLOADER_OFFSET_IN_FLASH in the framework's sdkconfig.h
+    (framework-arduinoespressif32-libs/<mcu>/.../include/sdkconfig.h).
+    A wrong offset bricks the board with ROM "invalid header" boot loops."""
+    mcu = env.BoardConfig().get("build.mcu", "")
+    if mcu in ("esp32", "esp32s2"):
+        return 0x1000
+    if mcu in ("esp32c5", "esp32p4"):
+        return 0x2000
+    return 0x0
+
+
 def _merge_firmware(source, target, env):   # noqa: ANN001
     build_dir   = env.subst("$BUILD_DIR")
     project_dir = env.subst("$PROJECT_DIR")
@@ -77,14 +94,30 @@ def _merge_firmware(source, target, env):   # noqa: ANN001
                    else [sys.executable, "-m", "esptool"])
 
     app_offset = _factory_offset(env)
+    bootloader_offset = _bootloader_offset(env)
+
+    # Chip / flash parameters come from the board definition instead of being
+    # hard-coded: nm-epd-420-4c is esp32s3/dio/16MB, esp32-c5-spectra-e6 is
+    # esp32c5/qio/8MB.
+    board = env.BoardConfig()
+    chip = board.get("build.mcu", "esp32s3")
+    flash_mode = env.GetProjectOption(
+        "board_build.flash_mode", board.get("build.flash_mode", "dio"))
+    # Mirror pioarduino's _get_board_flash_mode(): qio/qout are normalized to
+    # dio in the image header (same runtime behaviour, broader compatibility) —
+    # keeps this merged image identical to what `pio run -t upload` flashes.
+    if flash_mode in ("qio", "qout"):
+        flash_mode = "dio"
+    flash_size = board.get("upload.flash_size", "16MB")
+
     args = esptool_cmd + [
-        "--chip", "esp32s3",
+        "--chip", chip,
         "merge_bin",
         "-o", output,
-        "--flash_mode", "dio",
+        "--flash_mode", flash_mode,
         "--flash_freq", "80m",
-        "--flash_size", "16MB",
-        "0x0000", bootloader,
+        "--flash_size", flash_size,
+        hex(bootloader_offset), bootloader,
         "0x8000", partitions,
         "0xe000", boot_app0,
         hex(app_offset), firmware,

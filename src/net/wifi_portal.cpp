@@ -24,6 +24,7 @@ static String     s_macTail;   // last 3 MAC bytes, uppercase hex, e.g. "2BF864"
 static String     s_apSsid;    // Inkstone-XXXXXX
 static String     s_mdnsHost;  // inkstone
 static uint32_t   s_bootPressedAt = 0;
+static bool       s_bootKeyOk = true;  // BOOT read HIGH at boot (not stuck)
 
 static Preferences& prefs() {
     static Preferences p;
@@ -93,6 +94,21 @@ static void startMdns() {
     }
 }
 
+// ─── radio bands ────────────────────────────────────────────────────────────
+// ESP32-C5 is dual-band Wi-Fi 6 (2.4 GHz + 5 GHz). WIFI_BAND_MODE_AUTO lets a
+// saved network on either band connect without any config change; other chips
+// (ESP32-S3) are 2.4 GHz-only and skip this. Call after WiFi.mode() so the
+// Wi-Fi driver is initialized.
+static void configureBands() {
+#if defined(CONFIG_IDF_TARGET_ESP32C5)
+    if (esp_wifi_set_band_mode(WIFI_BAND_MODE_AUTO) == ESP_OK) {
+        Serial.println("[wifi] dual-band: 2.4/5 GHz auto");
+    } else {
+        Serial.println("[wifi] set band mode failed, using driver default");
+    }
+#endif
+}
+
 bool connectStaOnly() {
     prefs().begin("wifi", true);
     String ssid = prefs().getString("ssid", "");
@@ -101,6 +117,7 @@ bool connectStaOnly() {
     if (ssid.isEmpty()) return false;
 
     WiFi.mode(WIFI_STA);
+    configureBands();
     WiFi.begin(ssid.c_str(), pass.c_str());
     uint32_t started = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - started < STA_TIMEOUT_MS) {
@@ -134,6 +151,16 @@ Mode begin() {
     Serial.printf("[wifi] MAC=%s  AP=%s  mDNS=%s.local\n",
                   s_mac.c_str(), s_apSsid.c_str(), s_mdnsHost.c_str());
 
+    // If the BOOT key already reads LOW at boot (stuck key, missing pull-up on
+    // a strapping pin, ...), the 5s rescue hold would fire on every boot and
+    // reboot-loop the device. Disable it for this boot instead; the key still
+    // works as a wake/interaction input where the hardware allows.
+    if (PIN_BOOT_BTN >= 0 && digitalRead(PIN_BOOT_BTN) == LOW) {
+        s_bootKeyOk = false;
+        Serial.printf("[wifi] BOOT key (GPIO%d) reads LOW at boot; "
+                      "rescue-hold disabled this boot\n", PIN_BOOT_BTN);
+    }
+
     if (connectStaOnly()) {
         Serial.printf("[wifi] STA connected, IP=%s\n",
                       WiFi.localIP().toString().c_str());
@@ -144,6 +171,7 @@ Mode begin() {
 
     // AP mode
     WiFi.mode(WIFI_AP);
+    configureBands();
     String apPass = apPassword();
     WiFi.softAP(s_apSsid.c_str(), apPass.c_str());
     s_mode = Mode::AP;
@@ -164,7 +192,7 @@ void tick() {
     if (s_mode == Mode::AP) s_dns.processNextRequest();
 
     // BOOT held 5 s: clear credentials -> reboot into AP (rescue channel)
-    if (digitalRead(PIN_BOOT_BTN) == LOW) {
+    if (PIN_BOOT_BTN >= 0 && s_bootKeyOk && digitalRead(PIN_BOOT_BTN) == LOW) {
         if (s_bootPressedAt == 0) {
             s_bootPressedAt = millis();
         } else if (millis() - s_bootPressedAt >= BOOT_HOLD_MS) {
